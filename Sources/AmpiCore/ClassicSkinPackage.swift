@@ -4,7 +4,7 @@ import Darwin
 import ImageIO
 import ZIPFoundation
 
-/// Validated Classic assets for inspection only; this is not an activated playback skin.
+/// Bounded, validated Classic assets; activation requires a separate renderer-specific sprite check.
 public struct ClassicSkinPackage: Sendable {
     /// Source filename used for the preview title; not inferred authorship metadata.
     public let name: String
@@ -201,7 +201,7 @@ public struct ClassicSkinPackage: Sendable {
         /// Common sprites absent from this package, reported without blocking background inspection.
         let missing = ["cbuttons.bmp", "titlebar.bmp", "text.bmp", "volume.bmp", "posbar.bmp", "pledit.bmp", "eqmain.bmp"].filter { assets[$0] == nil }
         /// Honest compatibility diagnostics; a decoded background does not mean a usable full skin.
-        var warnings = ["Preview only: the main.bmp background is shown; sprites, playlist, equalizer, and skin controls are not active."]
+        var warnings = ["Preview only until explicitly activated. Main, playlist, and equalizer artwork are checked separately. EQ uses native controls and ten-band DSP; full historical Classic controls remain pending."]
         if !missing.isEmpty { warnings.append("Missing common assets: " + missing.joined(separator: ", ") + ".") }
         return ClassicSkinPackage(name: name, root: root, assets: assets, warnings: warnings)
     }

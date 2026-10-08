@@ -7,3 +7,5 @@ Every handwritten Swift type, enum case, function, method, initializer, property
 Document parameter meaning, returned values, errors, units, bounds, actor requirements, callbacks, and state changes as relevant. Keep comments consistent with implementation. Generated SwiftPM sources and build artifacts are excluded. Shell code uses valid `# ///` comments.
 
 Preserve the independent macOS build. After Swift changes, run `swift build` and `swift test`; run native smoke checks when playback or rendering behavior changes.
+
+The owner wants manual testing instructions with every development increment. Update `docs/TESTING.md` and conclude each increment with concrete actions, expected outcomes, automated results, and current limits. Do not claim listening, mouse, or screen-reader checks unless they were actually performed.

@@ -4,15 +4,19 @@ import AmpiCore
 import UniformTypeIdentifiers
 
 /// Hosts replaceable skin views around one persistent playback session.
-@MainActor final class PlayerWindowController: NSWindowController {
+@MainActor final class PlayerWindowController: NSWindowController, NSWindowDelegate {
     /// Queue and transport model shared by every replacement surface.
     let session: PlaybackSession
     /// Currently displayed native skin surface.
-    private(set) var surface: SkinView
+    private(set) var surface: any PlayerSurface
     /// Refreshes playback time every 0.2 seconds, since offset changes have no observer event.
     private var timer: Timer?
     /// Most recently opened Classic inspector, retained separately from the active skin.
     private(set) var classicPreview: ClassicSkinPreviewController?
+    /// Optional detachable playlist bound to the same session while a Classic presentation is active.
+    private(set) var classicPlaylist: ClassicPlaylistWindowController?
+    /// Detachable session-owned EQ controls; native layouts use an original backdrop.
+    private(set) var equalizerPanel: EqualizerWindowController?
     /// Cancellable background inspection; a newer import supersedes a pending one.
     private var inspectionTask: Task<Void, Never>?
 
@@ -24,18 +28,19 @@ import UniformTypeIdentifiers
         self.session = session
         self.surface = SkinView(theme: theme, session: session)
         /// Native titled window sized to the layout's content surface.
-        let window = NSWindow(contentRect: surface.bounds, styleMask: [.titled, .closable, .miniaturizable],
+        let window = NSWindow(contentRect: surface.view.bounds, styleMask: [.titled, .closable, .miniaturizable],
                               backing: .buffered, defer: false)
         window.title = "Ampi — \(theme.name)"
-        window.contentView = surface
+        window.contentView = surface.view
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        window.delegate = self
         connectSurface()
         window.center()
         /// Refreshes the current surface after model changes without retaining the controller.
-        session.onChange = { [weak self] in self?.surface.refresh() }
+        session.onChange = { [weak self] in self?.refreshSurfaces() }
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.surface.refresh() }
+            Task { @MainActor in self?.refreshSurfaces() }
         }
     }
 
@@ -48,11 +53,148 @@ import UniformTypeIdentifiers
         try theme.validate()
         /// New surface attached only after its layout passes validation.
         let replacement = SkinView(theme: theme, session: session)
+        /// An existing EQ window gets the native backdrop without changing its curve or visibility.
+        let equalizer = equalizerPanel == nil ? nil : try EqualizerWindowController(package: nil, session: session)
+        /// Visibility and placement captured before closing the old skin's panels.
+        let visible = equalizerPanel?.window?.isVisible == true
+        /// Prior EQ origin, reused across layout changes.
+        let origin = equalizerPanel?.window?.frame.origin
+        install(replacement)
+        if let equalizer { installEqualizer(equalizer, visible: visible, origin: origin) }
+    }
+
+    /// Composes a validated Classic main surface before replacing the current interface.
+    /// - Throws: Missing or undersized required sprite errors, preserving the current surface.
+    func applyClassic(_ package: ClassicSkinPackage) throws {
+        /// Fully constructed replacement using the same queue and audio backend.
+        let replacement = try ClassicPlayerView(package: package, session: session)
+        /// Playlist is validated before installing either replacement, making activation atomic.
+        let playlist = try ClassicPlaylistWindowController(package: package, session: session)
+        /// All three surfaces must validate before any active window is replaced.
+        let equalizer = try EqualizerWindowController(package: package, session: session)
+        /// First Classic activation opens EQ; later replacements preserve the user's visibility choice.
+        let equalizerVisible = equalizerPanel?.window?.isVisible ?? true
+        /// Previous EQ placement persists when changing Classic artwork.
+        let equalizerOrigin = equalizerPanel?.window?.frame.origin
+        /// Existing visibility and position persist between Classic packages; first activation opens the panel.
+        let visible = classicPlaylist?.window?.isVisible ?? true
+        /// Previous native panel origin; contents keep their fixed dimensions in this increment.
+        let origin = classicPlaylist?.window?.frame.origin
+        /// Toolbar command forwards through the same transport dispatch path as the main window.
+        playlist.content.onAction = { [weak self] action in self?.perform(action) }
+        /// Local dropped URLs share file/skin routing with the main player.
+        playlist.content.onDrop = { [weak self] urls in self?.open(urls) }
+        /// Queue row plays through the existing backend, with a corrupt replacement preserving playback.
+        playlist.content.onPlay = { [weak self] index in self?.playQueueEntry(index) }
+        /// Native panel close updates the main PL indicator without stopping output.
+        playlist.onVisibilityChange = { [weak self] visible in self?.updatePlaylistVisibility(visible) }
+        install(replacement)
+        classicPlaylist = playlist
+        /// Position the first playlist below the player, keeping its bottom on the current screen.
+        if let frame = window?.frame, let playlistWindow = playlist.window {
+            playlistWindow.setFrameOrigin(origin ?? NSPoint(x: frame.minX,
+                y: max(window?.screen?.visibleFrame.minY ?? 0, frame.minY - playlistWindow.frame.height - 8)))
+        }
+        if visible { playlist.showWindow(nil) }
+        updatePlaylistVisibility(visible)
+        installEqualizer(equalizer, visible: equalizerVisible, origin: equalizerOrigin)
+    }
+
+    /// Installs prepared content, preserving the session, observer, and refresh timer.
+    private func install(_ replacement: any PlayerSurface) {
+        /// Intended content size captured before AppKit resizes a newly assigned content view.
+        let contentSize = replacement.view.bounds.size
+        classicPlaylist?.close()
+        classicPlaylist = nil
+        equalizerPanel?.close()
+        equalizerPanel = nil
         surface = replacement
         connectSurface()
-        window?.contentView = replacement
-        window?.setContentSize(replacement.bounds.size)
-        window?.title = "Ampi — \(theme.name)"
+        window?.contentView = replacement.view
+        window?.setContentSize(contentSize)
+        window?.title = "Ampi — \(replacement.displayName)"
+        window?.recalculateKeyViewLoop()
+    }
+
+    /// Updates both surfaces through one session observer and timer; hidden playlists stay synchronized.
+    private func refreshSurfaces() {
+        surface.refresh()
+        classicPlaylist?.content.refresh()
+        equalizerPanel?.content.refresh()
+    }
+
+    /// Plays a valid highlighted queue row and reports failures without clearing the current track.
+    private func playQueueEntry(_ index: Int) {
+        do { try session.play(index: index) }
+        catch { session.report(error); showError(error.localizedDescription) }
+    }
+
+    /// Shows or hides the current Classic playlist without recreating the panel or playback session.
+    func togglePlaylist() {
+        /// Panel is available only while a Classic presentation is active.
+        guard let playlist = classicPlaylist else { return }
+        if playlist.window?.isVisible == true { playlist.close() }
+        else { playlist.content.refresh(); playlist.showWindow(nil) }
+        updatePlaylistVisibility(playlist.window?.isVisible == true)
+    }
+
+    /// Synchronizes the native main PL button with window-menu and title-bar close actions.
+    private func updatePlaylistVisibility(_ visible: Bool) {
+        /// Classic surface exposes the indicator; native layouts contain their own queue.
+        if let classic = surface as? ClassicPlayerView {
+            classic.playlistButton.state = visible ? .on : .off
+            classic.playlistButton.needsDisplay = true
+            classic.playlistButton.setAccessibilityValue(visible ? "Shown" : "Hidden")
+        }
+    }
+
+    /// Attaches a prepared panel, preserving its native origin and visibility across skin switches.
+    private func installEqualizer(_ equalizer: EqualizerWindowController, visible: Bool, origin: NSPoint?) {
+        equalizerPanel = equalizer
+        /// Closing through native chrome updates the active Classic EQ indicator.
+        equalizer.onVisibilityChange = { [weak self] visible in self?.updateEqualizerVisibility(visible) }
+        /// Initial EQ appears alongside the main window, clamped inside the screen's visible bounds.
+        if let frame = window?.frame, let panel = equalizer.window {
+            /// Screen bounds account for dock and menu bar when choosing the initial panel origin.
+            let screen = window?.screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+            panel.setFrameOrigin(origin ?? NSPoint(x: max(screen.minX, min(frame.maxX + 8, screen.maxX - panel.frame.width)),
+                y: max(screen.minY, frame.maxY - panel.frame.height)))
+        }
+        if visible { equalizer.showWindow(nil) }
+        updateEqualizerVisibility(visible)
+    }
+
+    /// Shows/hides EQ without changing DSP; native layouts lazily create the original fallback panel.
+    func toggleEqualizer() {
+        /// Existing hidden controls remain synchronized through the shared observer.
+        if let equalizer = equalizerPanel {
+            if equalizer.window?.isVisible == true { equalizer.close() }
+            else { equalizer.content.refresh(); equalizer.showWindow(nil) }
+            updateEqualizerVisibility(equalizer.window?.isVisible == true)
+        } else {
+            do { installEqualizer(try EqualizerWindowController(package: nil, session: session), visible: true, origin: nil) }
+            catch { showError(error.localizedDescription) }
+        }
+    }
+
+    /// Synchronizes the main EQ indicator with menu and native panel-close actions.
+    private func updateEqualizerVisibility(_ visible: Bool) {
+        /// Only the Classic main surface has an embedded EQ toggle; native layouts use the Window menu.
+        if let classic = surface as? ClassicPlayerView {
+            classic.equalizerButton.state = visible ? .on : .off
+            classic.equalizerButton.needsDisplay = true
+            classic.equalizerButton.setAccessibilityValue(visible ? "Shown" : "Hidden")
+        }
+    }
+
+    /// Closes child windows and stops output when the primary player closes, preventing orphan playback.
+    func windowWillClose(_ notification: Notification) {
+        inspectionTask?.cancel()
+        timer?.invalidate(); timer = nil
+        classicPlaylist?.close()
+        equalizerPanel?.close()
+        classicPreview?.close()
+        session.stop()
     }
 
     /// Routes the current surface's actions and file drops through this controller.
@@ -105,7 +247,7 @@ import UniformTypeIdentifiers
 
     /// Presents a native picker for Ampi JSON layouts, Classic archives, and extracted folders.
     func openTheme() {
-        /// Sheet accepting supported skin inputs; directories remain inspection-only.
+        /// Sheet accepting skin inputs; Classic packages/folders are inspected before explicit activation.
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json, .zip, UTType(filenameExtension: "wsz") ?? .data]
         panel.canChooseDirectories = true
@@ -134,6 +276,11 @@ import UniformTypeIdentifiers
                 guard let self else { return }
                 /// New inspector is constructed before closing a previously valid preview.
                 let preview = try ClassicSkinPreviewController(package: package)
+                /// Explicit activation applies the inspected package while keeping the preview available.
+                preview.onActivate = { [weak self] in
+                    do { try self?.applyClassic(package) }
+                    catch { self?.showError(error.localizedDescription) }
+                }
                 self.classicPreview?.close()
                 self.classicPreview = preview
                 preview.showWindow(nil)
@@ -150,13 +297,17 @@ import UniformTypeIdentifiers
     }
 
     /// Dispatches a supported skin/menu action and presents transport failures.
-    /// - Parameter action: Open, previous, playPause, stop, or next; unknown values are ignored.
+    /// - Parameter action: Open, playlist, equalizer, previous, play, pause, playPause, stop, or next; unknown values are ignored.
     func perform(_ action: String) {
         do {
             switch action {
             case "open": openFiles()
+            case "playlist": togglePlaylist()
+            case "equalizer": toggleEqualizer()
             case "previous": try session.previous()
             case "playPause": try session.togglePlayback()
+            case "play": try session.resume()
+            case "pause": session.pause()
             case "stop": session.stop()
             case "next": try session.next()
             default: break
@@ -180,12 +331,12 @@ import UniformTypeIdentifiers
     /// - Parameter url: Destination file, overwritten by the generated PNG data.
     /// - Throws: A bitmap creation, PNG encoding, or file-writing error.
     func exportPreview(to url: URL) throws {
-        surface.layoutSubtreeIfNeeded()
+        surface.view.layoutSubtreeIfNeeded()
         /// Bitmap sized for caching the full native content surface.
-        guard let bitmap = surface.bitmapImageRepForCachingDisplay(in: surface.bounds) else {
+        guard let bitmap = surface.view.bitmapImageRepForCachingDisplay(in: surface.view.bounds) else {
             throw ThemeError.invalid("Could not create a preview bitmap.")
         }
-        surface.cacheDisplay(in: surface.bounds, to: bitmap)
+        surface.view.cacheDisplay(in: surface.view.bounds, to: bitmap)
         /// Encoded PNG payload to write to the requested destination.
         guard let png = bitmap.representation(using: .png, properties: [:]) else {
             throw ThemeError.invalid("Could not encode the preview.")

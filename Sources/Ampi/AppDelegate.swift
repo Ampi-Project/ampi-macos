@@ -3,7 +3,7 @@ import AppKit
 import AmpiCore
 
 /// Creates the native player and connects application lifecycle and menu commands.
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Retained player controller, created after the default layout loads successfully.
     private var controller: PlayerWindowController?
     /// Native audio output retained for the lifetime of the application delegate.
@@ -72,6 +72,8 @@ import AmpiCore
 
         /// Native window commands also registered as AppKit's windows menu.
         let windowMenu = submenu("Window", in: main)
+        add("Show / Hide Classic Playlist", to: windowMenu, action: #selector(togglePlaylist), key: "l")
+        add("Show / Hide Equalizer", to: windowMenu, action: #selector(toggleEqualizer), key: "e")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         NSApp.windowsMenu = windowMenu
     }
@@ -115,6 +117,15 @@ import AmpiCore
     @objc private func previous() { controller?.perform("previous") }
     /// Advances to the next track or stops at the queue end from the native menu.
     @objc private func next() { controller?.perform("next") }
+    /// Toggles the detachable Classic playlist using a shortcut available while either player panel is focused.
+    @objc private func togglePlaylist() { controller?.togglePlaylist() }
+    /// Opens or hides the shared EQ panel from either native or Classic layouts.
+    @objc private func toggleEqualizer() { controller?.toggleEqualizer() }
+
+    /// Disables the Classic-only panel command while native layouts show their embedded queue.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action == #selector(togglePlaylist) ? controller?.classicPlaylist != nil : true
+    }
     /// Restores the original Retro Stereo layout.
     @objc private func retro() { changeTheme("retro") }
     /// Selects the original Quiet Space layout.

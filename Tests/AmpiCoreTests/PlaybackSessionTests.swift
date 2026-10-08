@@ -33,6 +33,39 @@ import XCTest
 
 /// Verifies queue/transport behavior and failure recovery independently of native audio.
 final class PlaybackSessionTests: XCTestCase {
+    /// Separate Classic Play/Pause commands never toggle unexpectedly or reload a paused track.
+    func testDedicatedPlayAndPauseAreIdempotent() async throws {
+        try await MainActor.run {
+            /// Backend recording whether repeated commands disturb its selection or offset.
+            let backend = FakeAudioBackend()
+            /// Empty session first verifies that Play/Pause cannot fabricate a selection.
+            let session = PlaybackSession(backend: backend)
+            try session.resume(); session.pause()
+            XCTAssertEqual(session.state, .stopped)
+            XCTAssertEqual(backend.loadCount, 0)
+            session.enqueue([URL(fileURLWithPath: "/tmp/track.wav")])
+            session.pause()
+            XCTAssertEqual(session.state, .stopped)
+            try session.resume()
+            session.seek(to: 42)
+            try session.resume()
+            XCTAssertEqual(session.state, .playing)
+            XCTAssertEqual(session.position, 42)
+            session.pause(); session.pause()
+            XCTAssertEqual(session.state, .paused)
+            XCTAssertEqual(session.position, 42)
+            XCTAssertFalse(backend.playing)
+            try session.resume()
+            XCTAssertEqual(session.state, .playing)
+            XCTAssertEqual(backend.loadCount, 1)
+            session.stop(); session.pause()
+            XCTAssertEqual(session.state, .stopped)
+            try session.resume()
+            XCTAssertEqual(session.position, 0)
+            XCTAssertEqual(backend.loadCount, 1)
+        }
+    }
+
     /// An empty queue must leave transport stopped and never start the backend.
     func testEmptyQueueDoesNotStartPlayback() async throws {
         try await MainActor.run {

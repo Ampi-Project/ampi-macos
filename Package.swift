@@ -13,6 +13,6 @@ let package = Package(
         .executableTarget(name: "Ampi", dependencies: ["AmpiCore"]),
         .testTarget(name: "AmpiCoreTests", dependencies: ["AmpiCore", .product(name: "ZIPFoundation", package: "ZIPFoundation")],
                     resources: [.copy("Fixtures")]),
-        .testTarget(name: "AmpiUITests", dependencies: ["Ampi"])
+        .testTarget(name: "AmpiUITests", dependencies: ["Ampi", "AmpiCore"], resources: [.copy("Fixtures")])
     ]
 )

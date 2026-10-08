@@ -29,7 +29,10 @@ extension NSColor {
     /// Draws the themed fill, centered title, outline, and current keyboard-focus indicator.
     /// - Parameter dirtyRect: AppKit invalidation region; the button redraws its full bounds.
     override func draw(_ dirtyRect: NSRect) {
-        (isHighlighted ? fill.blended(withFraction: 0.18, of: ink) ?? fill : fill).setFill()
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current?.cgContext.setAlpha(isEnabled ? 1 : 0.45)
+        (isHighlighted || state == .on ? fill.blended(withFraction: 0.18, of: ink) ?? fill : fill).setFill()
         /// Inset outline path that keeps its stroke inside the button bounds.
         let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         shape.fill()
@@ -68,7 +71,13 @@ extension NSColor {
 }
 
 /// Renders a validated declarative layout using native controls bound to one session.
-@MainActor final class SkinView: NSView, NSTableViewDataSource, NSTableViewDelegate {
+@MainActor final class SkinView: NSView, PlayerSurface, NSTableViewDataSource, NSTableViewDelegate {
+    /// Native layout content installed by the window controller.
+    var view: NSView { self }
+    /// Validated JSON layout identity for diagnostics.
+    var presentationID: String { theme.id }
+    /// Layout name used by the native title bar.
+    var displayName: String { theme.name }
     /// Validated layout and palette used throughout this surface's lifetime.
     let theme: Theme
     /// Persistent queue and transport model observed by the surface's controls.

@@ -1,6 +1,6 @@
 # Classic skin inspection — increment 2
 
-This macOS increment validates and previews Classic assets. It displays the raw `main.bmp` background at 2× nearest-neighbor scale alongside a compatibility report. It does not activate a Classic playback interface, compose sprite sheets, install packages, or interpret scripts. Audio and the active Ampi layout remain in their existing session.
+Increment 2 introduced bounded Classic validation and a raw `main.bmp` preview at 2× nearest-neighbor scale. Increments 3–5 add explicit **Use Classic Skin** activation, enabled only after the [main](CLASSIC-MAIN.md), optional [playlist](CLASSIC-PLAYLIST.md), and optional [equalizer](CLASSIC-EQUALIZER.md) artwork profiles pass. Inspection alone still leaves audio and the active layout unchanged. Packages are not installed and scripts are not interpreted.
 
 ## Inputs and current profile
 
@@ -8,7 +8,7 @@ Open **File → Open Skin / Layout…** (⌘⇧O), drop one `.wsz`/ZIP archive, 
 
 Supported archive profile: single-disk ZIP32, stored or DEFLATE files, normal/data-descriptor entries, CP437 or UTF-8 paths, flat or nested roots. Backslashes, filename casing, and Unicode normalization are handled before asset lookup. ZIP64, encryption, special Unix file types, symbolic links, duplicate normalized paths, ambiguous multiple `main.bmp` roots, and packages containing `skin.xml` are rejected.
 
-The unique `main.bmp` must be a decodable Windows BMP of exactly 275 × 116 pixels. Other BMPs directly beside it must also decode within the resource limits. Missing common sprites are reported without blocking background inspection; their dimensions and interactions are not yet certified. [Alpha-II's original skin-template documentation](https://www.alpha-ii.com/Info/Template.html) supplies the historical background dimensions and asset roles; no template artwork was copied.
+The unique `main.bmp` must be a decodable Windows BMP of exactly 275 × 116 pixels. Other BMPs directly beside it must also decode within the resource limits. Missing common sprites are reported without blocking background inspection; activation applies additional dimension checks. [Alpha-II's original skin-template documentation](https://www.alpha-ii.com/Info/Template.html) supplies the historical background dimensions and asset roles; no template artwork was copied.
 
 ## Validation and resource limits
 
@@ -35,8 +35,8 @@ dist/Ampi.app/Contents/MacOS/Ampi --classic-preview Tests/AmpiCoreTests/Fixtures
 dist/Ampi.app/Contents/MacOS/Ampi --smoke-test /path/to/a-three-second-or-longer.wav Tests/AmpiCoreTests/Fixtures/original-stored.wsz
 ```
 
-The optional second smoke-test input opens a visible Classic preview while muted native playback continues, then verifies that the active layout, track, transport, position, and gain remain intact.
+The optional second smoke-test input opens a visible Classic preview while muted native playback continues, then verifies that the active layout, track, transport, position, and gain remain intact. If its main profile is usable, the check now also activates it, exercises sprite Play/Pause and endpoint seeking, and restores the default layout.
 
 ## Remaining Classic work
 
-Compose sprite sheets and connect main-window controls, render playlist and equalizer panels with functioning DSP, support compact modes and panel behavior, test pixel scaling and accessibility, add managed installation/recovery, and expand the original/cleared corpus. Full Classic support remains a roadmap milestone; Modern XML/MAKI remains later work. The published cross-platform theme contract is still pending.
+Main controls, a native-input playlist, and native EQ controls with real DSP are implemented for the limited profiles. Remaining work includes historical EQ sprites/response graph/preset interchange, full historical playlist controls, compact/resizable/docked panel behavior, expanded scaling/accessibility checks, managed installation/recovery, and the original/cleared corpus. Full Classic support remains a roadmap milestone; Modern XML/MAKI remains later work. The published cross-platform theme contract is still pending.

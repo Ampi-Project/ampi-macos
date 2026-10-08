@@ -2,31 +2,36 @@
 import AppKit
 import AmpiCore
 
-/// Displays validated Classic background artwork at an integer scale without activating it.
+/// Inspects Classic artwork and offers explicit activation when its main-player sprites are usable.
 @MainActor final class ClassicSkinPreviewController: NSWindowController {
     /// Package whose original bytes and inspection diagnostics are displayed.
     let package: ClassicSkinPackage
     /// Native content used by the window and developer preview export.
     private let content: NSView
+    /// Main-actor callback activated only by the user's explicit preview button.
+    var onActivate: (() -> Void)?
+    /// Native activation button disabled when required sprite dimensions are unsupported.
+    private(set) var activateButton: NSButton
 
     /// Creates a preview containing the raw main background and an honest feature report.
     /// - Throws: A bitmap decoding error; the active playback surface is unaffected.
     init(package: ClassicSkinPackage) throws {
         self.package = package
-        self.content = ClassicPreviewContentView(frame: NSRect(x: 0, y: 0, width: 590, height: 430))
+        self.content = ClassicPreviewContentView(frame: NSRect(x: 0, y: 0, width: 590, height: 480))
+        self.activateButton = NSButton(title: "Use Classic Skin", target: nil, action: nil)
         /// Decoded background, previously checked by the importer for BMP identity and dimensions.
         guard let image = NSImage(data: package.mainBitmap) else { throw ThemeError.invalid("Cannot display the Classic background.") }
         /// Pixel-preserving image view showing the historical 275-by-116 image at two-times scale.
-        let artwork = ClassicBitmapView(image: image, frame: NSRect(x: 20, y: 178, width: 550, height: 232))
+        let artwork = ClassicBitmapView(image: image, frame: NSRect(x: 20, y: 228, width: 550, height: 232))
         artwork.setAccessibilityLabel("Classic main-window background preview")
         content.addSubview(artwork)
         /// Explicit compatibility status displayed above the asset report.
-        let status = NSTextField(labelWithString: "Preview only · Your active player and playback stay unchanged")
-        status.frame = NSRect(x: 20, y: 145, width: 550, height: 20)
+        let status = NSTextField(labelWithString: "Inspection · Activate below to use the partial Classic main player")
+        status.frame = NSRect(x: 20, y: 195, width: 550, height: 20)
         status.font = .systemFont(ofSize: 12, weight: .semibold)
         content.addSubview(status)
         /// Scrollable diagnostic text, including normalized root, assets, and missing sprites.
-        let scroll = NSScrollView(frame: NSRect(x: 20, y: 20, width: 550, height: 115))
+        let scroll = NSScrollView(frame: NSRect(x: 20, y: 65, width: 550, height: 115))
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         /// Read-only selectable report, allowing users to copy the import findings.
@@ -38,7 +43,19 @@ import AmpiCore
         report.isVerticallyResizable = true
         report.autoresizingMask = [.width]
         report.textContainer?.widthTracksTextView = true
-        report.string = "Root: \(package.root.isEmpty ? "archive/folder root" : package.root)\nAssets (\(package.assets.count)): \(package.assetNames.joined(separator: ", "))\n\n" + package.warnings.joined(separator: "\n\n")
+        /// Activation diagnosis is independent of the package's bounded inspection profile.
+        var activationReport = "Main, playlist, and equalizer activation available. Ten-band DSP, preamp, bypass, and original presets use native EQ controls. Missing optional artwork uses native fallbacks. Balance, shuffle/repeat, visualization, shade, and docking are not implemented."
+        do {
+            _ = try ClassicMainSprites(package: package)
+            /// Playlist border validation and color/fallback diagnostics share the actual activation profile.
+            let playlist = try ClassicPlaylistStyle(package: package)
+            activationReport += "\n\n" + playlist.diagnostics.joined(separator: "\n")
+            /// EQ validation uses the same optional-artwork rules as actual activation.
+            let equalizer = try ClassicEqualizerStyle(package: package)
+            activationReport += "\n\n" + equalizer.diagnostics.joined(separator: "\n")
+        }
+        catch { activateButton.isEnabled = false; activationReport = "Main activation unavailable: \(error.localizedDescription)" }
+        report.string = "Root: \(package.root.isEmpty ? "archive/folder root" : package.root)\nAssets (\(package.assets.count)): \(package.assetNames.joined(separator: ", "))\n\n" + activationReport + "\n\n" + package.warnings.joined(separator: "\n\n")
         report.setAccessibilityLabel("Classic skin inspection report")
         scroll.documentView = report
         content.addSubview(scroll)
@@ -48,11 +65,18 @@ import AmpiCore
         window.contentView = content
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        activateButton.frame = NSRect(x: 20, y: 18, width: 245, height: 32)
+        activateButton.bezelStyle = .rounded
+        activateButton.target = self; activateButton.action = #selector(activate(_:))
+        content.addSubview(activateButton)
         window.center()
     }
 
     /// Rejects archive/storyboard construction because a validated package is required.
     required init?(coder: NSCoder) { fatalError("Use init(package:)") }
+
+    /// Forwards explicit activation without replacing the session or closing the inspection window.
+    @objc private func activate(_ sender: NSButton) { onActivate?() }
 
     /// Exports the same native content as the visible inspector to a PNG for visual checks.
     /// - Parameter url: Destination preview file, overwritten on success.

@@ -1,0 +1,6 @@
+[Text]
+Normal=B4C8DD
+Current=4BE0A8
+NormalBG=050B12
+SelectedBG=294766
+Font=Original fixture uses native Unicode text

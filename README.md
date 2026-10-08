@@ -4,7 +4,7 @@ A free native music player with an original retro interface, whole-interface the
 
 ## Current state
 
-The native prototype is a standalone Swift package with local audio playback, queue and transport controls, native menus, and two replaceable JSON layouts. Increment 2 adds bounded Classic `.wsz`/ZIP/folder inspection and a bitmap preview with diagnostics. Full Classic activation and Modern support remain pending. No public application release has been created. See [DEVELOPMENT.md](DEVELOPMENT.md) for remaining work.
+The native prototype is a standalone Swift package with local playback, an append-only queue, native menus, and two replaceable JSON layouts. Increment 5 adds a detachable ten-band equalizer with real AVAudioEngine DSP, preamp, bypass, and original presets. It works with native layouts and partial Classic main/playlist skins; EQ settings survive track and skin changes. Full historical Classic controls and Modern support remain pending. No public application release has been created. See [DEVELOPMENT.md](DEVELOPMENT.md) and [what to test](docs/TESTING.md).
 
 ## Build and run
 
@@ -26,23 +26,30 @@ The script produces an ad-hoc signed local application, not a notarized distribu
 - **Queue:** double-click a track, or select it and press Return, to play it. Queue editing, shuffle, repeat, and persistence are not implemented yet.
 - **Layouts:** Themes → Quiet Space (⌘⇧1) replaces the compact horizontal layout with a taller arrangement. Restore Default (⌘⇧0) returns to Retro Stereo. Playback is not recreated during a switch.
 - **Custom layouts:** File → Open Skin / Layout… (⌘⇧O), or drop one JSON file. See [the experimental format](docs/THEME-DRAFT.md). Invalid layouts leave the current interface intact.
-- **Classic inspection:** open or drop one `.wsz`/ZIP archive or extracted folder to preview its main background and asset report. Inspection leaves playback and the active layout intact. See [the supported inspection profile](docs/CLASSIC-INSPECTION.md).
+- **Classic skins:** open or drop one `.wsz`/ZIP archive or extracted folder to inspect its artwork/report. Choose **Use Classic Skin** when activation is available. Main, playlist, and EQ share one session and validate before replacement. See the [main](docs/CLASSIC-MAIN.md), [playlist](docs/CLASSIC-PLAYLIST.md), [equalizer](docs/CLASSIC-EQUALIZER.md), and [inspection](docs/CLASSIC-INSPECTION.md) profiles.
+- **Classic playlist:** first activation opens it. **PL**, **Window → Show / Hide Classic Playlist**, or **⌘L** hides/reopens it without stopping music. Single-click/arrow keys browse; double-click, Return, or Play Selected plays a row. Add… appends audio; the native toolbar shares transport with the main window. Closing the primary player closes child windows and stops output.
 
-WAV playback is verified by a muted native smoke test. Other audio files are accepted only when Apple's AVAudioPlayer can decode them; there is no broad codec-support claim yet. Track titles currently come from filenames. Metadata/artwork, folder scanning, equalizer, detached panels, media keys, and device/interruption recovery remain future work.
+- **Equalizer:** **EQ**, **Window → Show / Hide Equalizer**, or **⌘E** shows/hides the panel. Enable the checkbox to apply preamp and ten nominal bands (31 Hz–16 kHz, ±12 dB). Closing the panel retains DSP. Presets preserve enabled/bypassed state; Reset Flat zeros gains. Native layouts and skins without `eqmain.bmp` use an original backdrop. Settings persist within this session, not across restart.
 
-**Classic preview is partial compatibility.** It shows raw background artwork; sprites and Classic controls, playlist/equalizer windows, and managed installation are not implemented. Modern XML/MAKI packages are rejected. The prototype JSON draft is not the final cross-platform theme package format.
+Original WAV, mono/stereo CAF, and generated AAC/M4A playback are verified by muted native checks. Files must decode through AVAudioFile into the documented mono/stereo floating-point graph profile; there is no broad codec-support claim yet. Track titles currently come from filenames. Metadata/artwork, scanning, media keys, and output-device/interruption recovery remain future work.
+
+**Classic support is partial.** Main transport, seek, volume, playlist borders/queue, and the EQ background work at 2× scale. Native text, table, scrollbar, playlist toolbar, EQ controls, and panel toggles provide the documented fallbacks. Historical EQ sprites/response graph/preset files, queue editing/saving/sorting, balance, shuffle/repeat, visualization, bitmap fonts/numbers, historical playlist menus/scrollbars, shade, docking, other scales, and installation remain pending. Modern XML/MAKI packages are rejected. JSON is an experimental repository-local draft.
 
 ## Verification
 
-`swift test` currently runs 29 tests covering playback, JSON validation, native button drawing, and original/malformed Classic packages. Developer commands render previews and exercise muted native audio:
+`swift test` currently runs 48 tests covering playback, JSON validation, native/Classic controls, playlist/EQ lifecycle, bounded imported colors, three-surface replacement safety, original/malformed packages, actual offline DSP samples, and real muted playback clocks and completion. Developer commands render previews and exercise muted native audio:
 
 ```sh
 dist/Ampi.app/Contents/MacOS/Ampi --preview /tmp/ampi-previews
 dist/Ampi.app/Contents/MacOS/Ampi --smoke-test /path/to/a-three-second-or-longer.wav
 dist/Ampi.app/Contents/MacOS/Ampi --classic-preview Tests/AmpiCoreTests/Fixtures/nested-deflated.wsz /tmp/ampi-classic-preview.png
+dist/Ampi.app/Contents/MacOS/Ampi --classic-player-preview Tests/AmpiUITests/Fixtures/playable-classic.wsz /tmp/ampi-classic-player.png
+dist/Ampi.app/Contents/MacOS/Ampi --classic-playlist-preview Tests/AmpiUITests/Fixtures/playable-classic.wsz /tmp/ampi-classic-playlist.png
+dist/Ampi.app/Contents/MacOS/Ampi --classic-equalizer-preview Tests/AmpiUITests/Fixtures/playable-classic.wsz /tmp/ampi-equalizer.png
+dist/Ampi.app/Contents/MacOS/Ampi --smoke-test /path/to/a-three-second-or-longer.wav Tests/AmpiUITests/Fixtures/playable-classic.wsz
 ```
 
-The smoke test plays at zero volume, seeks, replaces the layout, pauses, and stops. Append a Classic fixture path to verify visible inspection during playback too. It checks the real Apple audio backend, while playback unit tests use a deterministic fake. A physical listening check, full screen-reader review, and testing the deployment target on other Macs remain necessary before a release.
+The smoke test plays at zero volume through a non-flat EQ, seeks, changes layouts, pauses, and stops. With a usable Classic fixture, it activates during playback, uses sprite Play/Pause, checks a paused final-sample seek, selects a second queue entry through the playlist, hides/reopens that panel, and restores the default while retaining EQ. Offline DSP tests verify amplitude/frequency response; additional muted device tests verify actual pause/seek clocks, corrupt replacement, schedule cancellation, and auto-advance. Physical listening, full screen-reader review, and older/Intel Mac checks remain necessary before release. Follow [the manual guide](docs/TESTING.md).
 
 ## Repository
 
@@ -58,7 +65,7 @@ GitHub authentication must use an account with write access to the organization 
 
 ## Stack and responsibilities
 
-Swift 6, AppKit, and AVAudioPlayer form the initial prototype. Custom AppKit drawing supplies the backgrounds and buttons; native sliders and tables provide the remaining controls. The `AmpiCore` target is internal to this repository, not a required cross-project engine. This project owns future playback integration, music state, skins, legacy adapters, persistence, macOS integration, and packaging.
+Swift 6 and AppKit provide native rendering/input. AVAudioEngine streams AVAudioFile segments through AVAudioPlayerNode, AVAudioUnitEQ, and the output mixer; [the EQ profile](docs/CLASSIC-EQUALIZER.md) documents the audio path and limits. The `AmpiCore` target is internal to this repository, not a required cross-project engine. This project owns its music state, skins, legacy adapters, persistence, macOS integration, and packaging.
 
 Implement a versioned Ampi theme contract independently. Building or running this player must not require the Windows, Linux, or theme authoring repositories. Pin published specification artifacts when they exist.
 

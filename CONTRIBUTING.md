@@ -25,3 +25,5 @@ func seek(to seconds: Double) {
 For languages that do not accept bare `///`, use their valid comment prefix: shell scripts use `# ///`. Generated SwiftPM files and build products are excluded; do not edit them to satisfy this rule.
 
 Before submitting a change, inspect every new or changed declaration for documentation, run the relevant existing checks, and explain what changed and how it was verified. Run native playback/rendering checks when those behaviors change.
+
+Every development increment must include manual test instructions for the owner: what to open or click, the expected result, and current unsupported features. Keep [the testing guide](docs/TESTING.md) current. Report automated checks separately from human listening, mouse interaction, and accessibility review.

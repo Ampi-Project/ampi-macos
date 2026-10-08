@@ -56,6 +56,10 @@ public struct Track: Identifiable, Equatable, Sendable {
     public var onChange: (() -> Void)?
     /// Audio implementation retained across queue operations and skin replacements.
     private let backend: any AudioBackend
+    /// Curve retained independently of windows, skins, and loaded tracks.
+    public private(set) var equalizer = EqualizerSettings()
+    /// Whether this backend can actually process the ten-band curve.
+    public var supportsEqualizer: Bool { backend is any EqualizerAudioBackend }
 
     /// Creates an empty session using the supplied audio implementation.
     public init(backend: any AudioBackend) { self.backend = backend }
@@ -67,10 +71,13 @@ public struct Track: Identifiable, Equatable, Sendable {
     public var position: Double { max(0, backend.position) }
     /// Current output gain; use `setVolume(_:)` to change it with bounds checking.
     public var volume: Float { backend.volume }
+    /// Playing feedback derived from the live queue so appends cannot leave a stale track count.
+    private var playingStatus: String { "Playing · \(tracks.count) track\(tracks.count == 1 ? "" : "s") in queue" }
 
     /// Appends file URLs in input order, ignoring non-file URLs, then notifies the observer.
     public func enqueue(_ urls: [URL]) {
         tracks.append(contentsOf: urls.filter(\.isFileURL).map(Track.init))
+        if state == .playing { status = playingStatus }
         onChange?()
     }
 
@@ -92,20 +99,31 @@ public struct Track: Identifiable, Equatable, Sendable {
             throw PlaybackError.couldNotStart
         }
         state = .playing
-        status = "Playing · \(tracks.count) track\(tracks.count == 1 ? "" : "s") in queue"
+        status = playingStatus
         onChange?()
     }
 
     /// Pauses active playback or plays the selected entry (the first entry if unselected).
     /// An empty queue is ignored; backend errors propagate to the caller.
     public func togglePlayback() throws {
-        if state == .playing {
-            backend.pause(); state = .paused; status = "Paused"; onChange?()
-        }
+        if state == .playing { pause() }
+        else { try resume() }
+    }
+
+    /// Starts or resumes the selected entry, or the first entry of an unselected queue.
+    /// Empty queues and already playing sessions are ignored; backend errors propagate.
+    public func resume() throws {
+        guard state != .playing else { return }
         /// Queue index to resume or start when playback is not active.
-        else if let index = selectedIndex ?? (tracks.isEmpty ? nil : 0) {
+        if let index = selectedIndex ?? (tracks.isEmpty ? nil : 0) {
             try play(index: index)
         }
+    }
+
+    /// Pauses active output while retaining offset; paused or stopped sessions are ignored.
+    public func pause() {
+        guard state == .playing else { return }
+        backend.pause(); state = .paused; status = "Paused"; onChange?()
     }
 
     /// Stops and rewinds the loaded track while retaining its queue selection.
@@ -146,6 +164,40 @@ public struct Track: Identifiable, Equatable, Sendable {
         onChange?()
     }
 
+    /// Enables or bypasses supported DSP without clearing the curve or changing transport.
+    public func setEqualizerEnabled(_ enabled: Bool) {
+        guard supportsEqualizer else { return }
+        equalizer.setEnabled(enabled)
+        updateEqualizer()
+    }
+
+    /// Adjusts preamp in decibels; finite input is clamped to minus twelve through plus twelve.
+    public func setEqualizerPreamp(_ decibels: Float) {
+        guard supportsEqualizer, decibels.isFinite else { return }
+        equalizer.setPreamp(decibels)
+        updateEqualizer()
+    }
+
+    /// Adjusts a valid zero-based band in decibels without seeking or changing volume.
+    public func setEqualizerGain(_ decibels: Float, at index: Int) {
+        guard supportsEqualizer, equalizer.gains.indices.contains(index), decibels.isFinite else { return }
+        equalizer.setGain(decibels, at: index)
+        updateEqualizer()
+    }
+
+    /// Applies an original preset, preserving bypass state and transport position.
+    public func applyEqualizerPreset(_ preset: EqualizerPreset) {
+        guard supportsEqualizer else { return }
+        equalizer.apply(preset)
+        updateEqualizer()
+    }
+
+    /// Delivers the current curve synchronously to a capable backend and refreshes observers.
+    private func updateEqualizer() {
+        (backend as? any EqualizerAudioBackend)?.applyEqualizer(equalizer)
+        onChange?()
+    }
+
     /// Displays an error's localized description without changing transport state.
     public func report(_ error: Error) {
         status = error.localizedDescription; onChange?()
@@ -166,6 +218,13 @@ public struct Track: Identifiable, Equatable, Sendable {
 public enum PlaybackError: LocalizedError {
     /// The backend could not start output for the selected track.
     case couldNotStart
+    /// The decoder produced empty audio or a format outside the current native processing profile.
+    case unsupportedDecodedFormat
     /// Human-readable explanation used by session feedback and alerts.
-    public var errorDescription: String? { "The audio output could not start." }
+    public var errorDescription: String? {
+        switch self {
+        case .couldNotStart: return "The audio output could not start."
+        case .unsupportedDecodedFormat: return "The audio file has no supported decoded samples. The current player processes mono or stereo floating-point audio."
+        }
+    }
 }
