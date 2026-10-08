@@ -56,7 +56,7 @@ import AmpiCore
         /// Audio and JSON-layout file selection commands.
         let file = submenu("File", in: main)
         add("Open Audio…", to: file, action: #selector(openAudio), key: "o")
-        add("Load Ampi Layout…", to: file, action: #selector(openLayout), key: "o", modifiers: [.command, .shift])
+        add("Open Skin / Layout…", to: file, action: #selector(openLayout), key: "o", modifiers: [.command, .shift])
 
         /// Transport actions available regardless of the active layout.
         let playback = submenu("Playback", in: main)
@@ -105,7 +105,7 @@ import AmpiCore
 
     /// Opens the player's native audio-file picker from the File menu.
     @objc private func openAudio() { controller?.openFiles() }
-    /// Opens the player's experimental JSON-layout picker from the File menu.
+    /// Opens the JSON-layout and Classic-package picker from the File menu.
     @objc private func openLayout() { controller?.openTheme() }
     /// Toggles transport through the same dispatch path used by skin buttons.
     @objc private func togglePlayback() { controller?.perform("playPause") }

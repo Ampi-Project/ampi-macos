@@ -10,6 +10,18 @@ app.setActivationPolicy(.regular)
 let arguments = CommandLine.arguments
 
 // Developer checks exercise the real native renderer/backend without interactive dialogs.
+if arguments.count == 4 && arguments[1] == "--classic-preview" {
+    do {
+        /// Validated package read from the developer-supplied archive or folder.
+        let package = try ClassicSkinPackage.load(URL(fileURLWithPath: arguments[2]))
+        /// Inspector using the same bitmap rendering and diagnostic report as the live app.
+        let controller = try ClassicSkinPreviewController(package: package)
+        try controller.exportPreview(to: URL(fileURLWithPath: arguments[3]))
+        print("PASS: Classic background preview, \(package.assets.count) assets, root '\(package.root)'. Preview only; controls are not activated.")
+        exit(0)
+    } catch { print("Classic inspection failed: \(error)"); exit(1) }
+}
+
 if arguments.count == 3 && arguments[1] == "--preview" {
     do {
         /// Output folder in which each bundled layout receives a PNG preview.
@@ -28,7 +40,7 @@ if arguments.count == 3 && arguments[1] == "--preview" {
     } catch { print("Preview failed: \(error)"); exit(1) }
 }
 
-if arguments.count == 3 && arguments[1] == "--smoke-test" {
+if (3...4).contains(arguments.count) && arguments[1] == "--smoke-test" {
     do {
         /// Real native audio implementation used for the muted playback smoke check.
         let backend = NativeAudioBackend()
@@ -47,6 +59,23 @@ if arguments.count == 3 && arguments[1] == "--smoke-test" {
         try controller.apply(ThemeCatalog.builtin("minimal"))
         guard session.currentTrack?.id == originalTrack, session.state == .playing,
               session.volume == 0, session.position >= 0.5 else { throw PlaybackError.couldNotStart }
+        if arguments.count == 4 {
+            controller.open([URL(fileURLWithPath: arguments[3])])
+            /// Bounded wait for the same asynchronous inspector invoked by file-open and drop handling.
+            let deadline = Date().addingTimeInterval(5)
+            while controller.classicPreview == nil && Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            }
+            /// Completed visible inspector whose layer-backed drawing is checked during playback.
+            guard let preview = controller.classicPreview else { throw ThemeError.invalid("Classic inspection did not open its preview within five seconds.") }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            guard controller.surface.theme.id == "ampi.minimal", session.currentTrack?.id == originalTrack,
+                  session.state == .playing, session.volume == 0, session.position >= 0.5 else {
+                throw ThemeError.invalid("Classic inspection changed the active playback session.")
+            }
+            preview.close()
+            print("PASS: Classic inspection preserved the active layout, track, playback, position, and volume.")
+        }
         try session.togglePlayback()
         guard session.state == .paused else { throw PlaybackError.couldNotStart }
         session.stop()

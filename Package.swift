@@ -6,10 +6,13 @@ let package = Package(
     name: "Ampi",
     platforms: [.macOS(.v13)],
     products: [.executable(name: "Ampi", targets: ["Ampi"])],
+    dependencies: [.package(url: "https://github.com/weichsel/ZIPFoundation.git", exact: "0.9.20")],
     targets: [
-        .target(name: "AmpiCore", resources: [.process("Themes")]),
+        .target(name: "AmpiCore", dependencies: [.product(name: "ZIPFoundation", package: "ZIPFoundation")],
+                resources: [.process("Themes")]),
         .executableTarget(name: "Ampi", dependencies: ["AmpiCore"]),
-        .testTarget(name: "AmpiCoreTests", dependencies: ["AmpiCore"]),
+        .testTarget(name: "AmpiCoreTests", dependencies: ["AmpiCore", .product(name: "ZIPFoundation", package: "ZIPFoundation")],
+                    resources: [.copy("Fixtures")]),
         .testTarget(name: "AmpiUITests", dependencies: ["Ampi"])
     ]
 )

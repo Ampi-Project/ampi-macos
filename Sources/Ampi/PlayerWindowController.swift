@@ -11,6 +11,10 @@ import UniformTypeIdentifiers
     private(set) var surface: SkinView
     /// Refreshes playback time every 0.2 seconds, since offset changes have no observer event.
     private var timer: Timer?
+    /// Most recently opened Classic inspector, retained separately from the active skin.
+    private(set) var classicPreview: ClassicSkinPreviewController?
+    /// Cancellable background inspection; a newer import supersedes a pending one.
+    private var inspectionTask: Task<Void, Never>?
 
     /// Builds a fixed-size player window for a previously validated layout.
     /// - Parameters:
@@ -74,15 +78,21 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// Imports a lone JSON layout or appends audio files and starts an unselected queue.
-    /// Legacy skin archives currently produce a milestone notice instead of being imported.
+    /// Applies a lone JSON layout, previews a Classic package/folder, or queues audio files.
+    /// Modern skins and mixed audio/skin selections produce a diagnostic.
     /// - Parameter urls: Files selected, dropped, or delivered by macOS.
     func open(_ urls: [URL]) {
         if urls.count == 1, urls[0].pathExtension.lowercased() == "json" {
             importTheme(urls[0]); return
         }
-        if urls.contains(where: { ["wsz", "wal", "zip"].contains($0.pathExtension.lowercased()) }) {
-            showError("Winamp skin import is scheduled for a later milestone. This prototype loads Ampi JSON layouts only.")
+        /// Skin candidates are handled separately so their bytes never reach the audio decoder.
+        let skinInputs = urls.filter { url in
+            ["wsz", "wal", "zip"].contains(url.pathExtension.lowercased()) ||
+                (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+        if !skinInputs.isEmpty {
+            guard urls.count == 1 else { showError("Inspect one skin package or folder at a time, separately from audio files."); return }
+            previewClassicSkin(urls[0])
             return
         }
         /// First appended queue index, used to start playback when no track is selected.
@@ -93,17 +103,43 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// Presents a native JSON picker and imports the accepted layout.
+    /// Presents a native picker for Ampi JSON layouts, Classic archives, and extracted folders.
     func openTheme() {
-        /// Sheet restricted to experimental Ampi JSON layout files.
+        /// Sheet accepting supported skin inputs; directories remain inspection-only.
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.prompt = "Load Layout"
+        panel.allowedContentTypes = [.json, .zip, UTType(filenameExtension: "wsz") ?? .data]
+        panel.canChooseDirectories = true
+        panel.prompt = "Open Skin"
         /// Response indicates whether the user accepted a layout selection.
         panel.beginSheetModal(for: window!) { [weak self] response in
             /// Accepted layout file URL; cancellation or an absent URL leaves the skin unchanged.
             guard response == .OK, let url = panel.url else { return }
-            self?.importTheme(url)
+            self?.open([url])
+        }
+    }
+
+    /// Inspects Classic input off the main actor and opens a preview without changing playback.
+    /// - Parameter url: ZIP/.wsz file or extracted folder; Modern input is rejected by structure.
+    func previewClassicSkin(_ url: URL) {
+        inspectionTask?.cancel()
+        /// Weak controller capture prevents the import task from keeping a closed controller alive.
+        inspectionTask = Task { [weak self] in
+            do {
+                /// Worker performs bounded file reads, decompression, and bitmap checks off the UI thread.
+                let worker = Task.detached(priority: .userInitiated) { try ClassicSkinPackage.load(url) }
+                /// Cancellation is forwarded to the worker, whose read/decompression loops check it.
+                let package = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                try Task.checkCancellation()
+                /// Available controller, retained only while attaching the completed preview.
+                guard let self else { return }
+                /// New inspector is constructed before closing a previously valid preview.
+                let preview = try ClassicSkinPreviewController(package: package)
+                self.classicPreview?.close()
+                self.classicPreview = preview
+                preview.showWindow(nil)
+            } catch is CancellationError {
+                // A newer inspection superseded this one; no user-facing error is needed.
+            } catch { self?.showError(error.localizedDescription) }
         }
     }
 

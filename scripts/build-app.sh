@@ -22,6 +22,8 @@ for bundle in "$ampi_bin"/*.bundle; do
     ditto "$bundle" "$ampi_app/Contents/Resources/$(basename "$bundle")"
 done
 cp LICENSE "$ampi_app/Contents/Resources/LICENSE"
+# /// Dependency notices accompany the statically linked ZIP parser in local app bundles.
+ditto licenses "$ampi_app/Contents/Resources/licenses"
 cat > "$ampi_app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -1,6 +1,6 @@
 # macOS development checklist
 
-Increment 1: native prototype implemented. This checklist distinguishes the working foundation from features needed for a complete player.
+Increments 1–2: native playback/layout prototype and Classic package inspection implemented. This checklist distinguishes the working foundation from features needed for a complete player.
 
 ## Foundation
 
@@ -23,6 +23,10 @@ Increment 1: native prototype implemented. This checklist distinguishes the work
 - [ ] Implement metadata/artwork, queue editing, shuffle/repeat, and restart persistence.
 - [ ] Handle native file access, media keys, output changes, and lifecycle interruptions.
 - [ ] Implement Classic package detection, validation, rendering, scaling, and tested panel behavior.
+  - [x] Validate ZIP32 stored/DEFLATE archives and extracted folders with bounded reads and CRC checks.
+  - [x] Preview the main bitmap at 2× integer scale with an asset/compatibility report.
+  - [x] Add original flat/nested Classic fixtures and malformed-package tests.
+  - [ ] Compose sprites and activate the Classic main, playlist, and equalizer controls.
 - [ ] Connect the main, playlist, and equalizer controls to functioning playback/DSP.
 - [ ] Implement native theme layouts and three substantially different original examples.
 - [ ] Switch skins while preserving the same audio session and music state.
@@ -32,7 +36,8 @@ Increment 1: native prototype implemented. This checklist distinguishes the work
 
 ## Acceptance and release
 
-- [x] Pass 15 core playback/JSON-validation tests, a native button-rendering test, and a muted real-backend playback/layout smoke test.
+- [x] Pass 29 playback/JSON/Classic/native-rendering tests and a muted real-backend playback/layout smoke test.
+- [x] Verify Classic preview during playback preserves the active layout and session.
 - [x] Render and visually inspect both original layouts; launch the app and verify native theme shortcuts and the file picker.
 - [ ] Run legacy-package fixture checks and complete accessibility conformance checks.
 - [ ] Verify real playback, clean installation, restart recovery, and theme switching on supported Macs.
