@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "ampi.minimal",
+  "name": "Quiet Space",
+  "width": 460,
+  "height": 550,
+  "cornerRadius": 14,
+  "palette": { "background": "#EDE8DF", "panel": "#E1D9CB", "text": "#243B3B", "muted": "#667875", "accent": "#276A61" },
+  "elements": [
+    { "id": "brand", "kind": "label", "frame": [32, 26, 396, 34], "label": "ampi / quiet space", "fontSize": 20 },
+    { "id": "track", "kind": "label", "frame": [32, 90, 396, 48], "label": "Choose something to play", "binding": "track", "fontSize": 23 },
+    { "id": "time", "kind": "label", "frame": [32, 149, 396, 24], "label": "00:00", "binding": "time", "fontSize": 13 },
+    { "id": "seek", "kind": "slider", "frame": [32, 182, 396, 24], "label": "Playback position", "binding": "position" },
+    { "id": "previous", "kind": "button", "frame": [32, 224, 86, 42], "label": "Previous", "action": "previous" },
+    { "id": "play", "kind": "button", "frame": [128, 224, 114, 42], "label": "Play", "action": "playPause" },
+    { "id": "next", "kind": "button", "frame": [252, 224, 78, 42], "label": "Next", "action": "next" },
+    { "id": "open", "kind": "button", "frame": [340, 224, 88, 42], "label": "Open", "action": "open" },
+    { "id": "volume-label", "kind": "label", "frame": [32, 288, 70, 22], "label": "Volume", "fontSize": 12 },
+    { "id": "volume", "kind": "slider", "frame": [108, 286, 320, 24], "label": "Volume", "binding": "volume" },
+    { "id": "queue", "kind": "queue", "frame": [32, 332, 396, 150], "label": "Playback queue" },
+    { "id": "status", "kind": "label", "frame": [32, 505, 396, 24], "label": "Ready", "binding": "status", "fontSize": 11 }
+  ]
+}

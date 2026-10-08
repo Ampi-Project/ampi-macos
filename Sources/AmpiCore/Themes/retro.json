@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "ampi.retro",
+  "name": "Retro Stereo",
+  "width": 620,
+  "height": 450,
+  "cornerRadius": 3,
+  "palette": { "background": "#161C27", "panel": "#0A1119", "text": "#DCE7D5", "muted": "#819398", "accent": "#B4F46C" },
+  "elements": [
+    { "id": "brand", "kind": "label", "frame": [22, 16, 180, 30], "label": "A M P I", "fontSize": 22 },
+    { "id": "tagline", "kind": "label", "frame": [340, 23, 258, 20], "label": "YOUR MUSIC. YOUR INTERFACE.", "fontSize": 11 },
+    { "id": "track", "kind": "label", "frame": [22, 62, 434, 42], "label": "No track selected", "binding": "track", "fontSize": 19 },
+    { "id": "time", "kind": "label", "frame": [474, 69, 124, 30], "label": "00:00", "binding": "time", "fontSize": 13 },
+    { "id": "seek", "kind": "slider", "frame": [22, 118, 576, 24], "label": "Playback position", "binding": "position" },
+    { "id": "previous", "kind": "button", "frame": [22, 160, 58, 36], "label": "PREV", "action": "previous" },
+    { "id": "play", "kind": "button", "frame": [88, 160, 86, 36], "label": "PLAY", "action": "playPause" },
+    { "id": "stop", "kind": "button", "frame": [182, 160, 58, 36], "label": "STOP", "action": "stop" },
+    { "id": "next", "kind": "button", "frame": [248, 160, 58, 36], "label": "NEXT", "action": "next" },
+    { "id": "open", "kind": "button", "frame": [314, 160, 70, 36], "label": "OPEN", "action": "open" },
+    { "id": "volume-label", "kind": "label", "frame": [412, 159, 160, 18], "label": "VOLUME", "fontSize": 10 },
+    { "id": "volume", "kind": "slider", "frame": [408, 178, 190, 20], "label": "Volume", "binding": "volume" },
+    { "id": "queue-label", "kind": "label", "frame": [22, 216, 550, 20], "label": "PLAYLIST / DOUBLE-CLICK TO PLAY", "fontSize": 11 },
+    { "id": "queue", "kind": "queue", "frame": [22, 242, 576, 154], "label": "Playback queue" },
+    { "id": "status", "kind": "label", "frame": [22, 416, 576, 20], "label": "Ready", "binding": "status", "fontSize": 11 }
+  ]
+}

@@ -1,30 +1,40 @@
 # macOS development checklist
 
-All implementation items are pending. This repository is documentation-only.
+Increment 1: native prototype implemented. This checklist distinguishes the working foundation from features needed for a complete player.
 
 ## Foundation
 
-- [ ] Choose the minimum macOS version, supported architectures, build system, audio dependencies, and renderer.
-- [ ] Create the native app and standalone build instructions.
-- [ ] Prototype AppKit custom drawing, native menus, custom windows, input hit testing, focus, and accessibility.
-- [ ] Record transparency and detached-window behavior, including usable fallbacks.
+- [x] Document handwritten functions and variables with `///` and record the convention in contributor instructions.
+- [x] Select macOS 13 deployment target, Swift Package Manager, AVAudioPlayer, and AppKit for the prototype.
+- [x] Create the native app, local `.app` packaging script, and standalone build instructions.
+- [x] Implement native menus, custom drawing, labelled controls, keyboard transport actions, and different fixed-size layouts.
+- [x] Record prototype window constraints: native title bar, opaque rectangular surface, fixed size, and no detached panels.
+- [ ] Verify older supported macOS versions and Intel hardware; Apple Silicon is locally tested.
+- [ ] Complete full keyboard/screen-reader review and investigate custom-shaped/detached windows.
 - [ ] Pin the published theme contract and cleared fixture versions when available.
 
 ## Player and skins
 
-- [ ] Implement local audio, transport controls, metadata/artwork, queue editing, shuffle/repeat, and restart persistence.
+- [x] Implement local file playback, play/pause/stop, seek, volume, previous/next, append-only queue, and automatic advance.
+- [x] Implement local file picker and audio-file drop handling.
+- [x] Implement an experimental JSON layout reader with two original built-in layouts and safe replacement.
+- [x] Preserve the playback session, queue, position, and volume during layout replacement.
+- [x] Provide native-menu and shortcut actions to restore the default layout.
+- [ ] Implement metadata/artwork, queue editing, shuffle/repeat, and restart persistence.
 - [ ] Handle native file access, media keys, output changes, and lifecycle interruptions.
 - [ ] Implement Classic package detection, validation, rendering, scaling, and tested panel behavior.
 - [ ] Connect the main, playlist, and equalizer controls to functioning playback/DSP.
 - [ ] Implement native theme layouts and three substantially different original examples.
 - [ ] Switch skins while preserving the same audio session and music state.
-- [ ] Provide a permanent native-menu/shortcut recovery action for broken skins.
+- [ ] Persist theme selection and recover safely from a bad saved theme at startup.
 - [ ] Implement library scanning and search after the skin foundation works.
 - [ ] Implement the declared Modern XML/MAKI compatibility profile, including bounded script execution and diagnostics.
 
 ## Acceptance and release
 
-- [ ] Run meaningful behavior, visual, accessibility, and malformed-package checks with cleared fixtures.
+- [x] Pass 15 core playback/JSON-validation tests, a native button-rendering test, and a muted real-backend playback/layout smoke test.
+- [x] Render and visually inspect both original layouts; launch the app and verify native theme shortcuts and the file picker.
+- [ ] Run legacy-package fixture checks and complete accessibility conformance checks.
 - [ ] Verify real playback, clean installation, restart recovery, and theme switching on supported Macs.
 - [ ] Document actual format and native/Classic/Modern profile support.
 - [ ] Produce release binaries, applicable signing/notarization procedures, source, and license notices.
