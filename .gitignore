@@ -5,3 +5,5 @@ Thumbs.db
 dist/
 DerivedData/
 *.xcuserstate
+# /// Keep Markdown documentation in the unversioned ampi-flow directory.
+*.[mM][dD]
