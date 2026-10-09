@@ -5,5 +5,6 @@ Thumbs.db
 dist/
 DerivedData/
 *.xcuserstate
-# /// Keep Markdown documentation in the unversioned ampi-flow directory.
+# /// Keep internal Markdown documentation in ampi-flow; the public root README is tracked.
 *.[mM][dD]
+!/README.md
