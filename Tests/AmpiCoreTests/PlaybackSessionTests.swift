@@ -3,7 +3,7 @@ import XCTest
 @testable import AmpiCore
 
 /// Deterministic audio substitute that records transport calls without opening audio output.
-@MainActor private final class FakeAudioBackend: AudioBackend {
+@MainActor private final class FakeAudioBackend: EqualizerAudioBackend {
     /// Simulated track length in seconds, used to check seek clamping.
     var duration = 120.0
     /// Simulated offset in seconds, retained during pause and reset during load/stop.
@@ -18,6 +18,12 @@ import XCTest
     var playing = false
     /// Configurable start result used to simulate an audio-output failure.
     var canStart = true
+    /// Retained EQ settings verify that queue editing leaves DSP unchanged.
+    var settings = EqualizerSettings()
+    /// Stop calls detect unintended output interruption during noncurrent edits.
+    var stopCount = 0
+    /// Records the bounded curve without changing fake transport or output volume.
+    func applyEqualizer(_ settings: EqualizerSettings) { self.settings = settings }
     /// Loads a fake file, rejecting the corrupt fixture before mutating existing state.
     func load(_ url: URL) throws {
         if url.lastPathComponent == "corrupt.wav" { throw PlaybackError.couldNotStart }
@@ -28,11 +34,127 @@ import XCTest
     /// Suspends simulated output without changing its offset.
     func pause() { playing = false }
     /// Stops simulated output and rewinds to zero seconds.
-    func stop() { playing = false; position = 0 }
+    func stop() { playing = false; position = 0; stopCount += 1 }
 }
 
 /// Verifies queue/transport behavior and failure recovery independently of native audio.
 final class PlaybackSessionTests: XCTestCase {
+    /// Removing either side of the loaded entry preserves its identity, offset, state, volume, and EQ.
+    func testRemovingOtherEntriesPreservesDuplicateLoadedIdentity() async throws {
+        try await MainActor.run {
+            /// Each transport state is preserved when the removed entry is not loaded.
+            for state in [PlaybackSession.State.playing, .paused, .stopped] {
+                /// Backend counts decoder and stop calls independently of presentation.
+                let backend = FakeAudioBackend()
+                /// Duplicate URLs must retain distinct queue identities.
+                let session = PlaybackSession(backend: backend)
+                session.enqueue([URL(fileURLWithPath: "/first.wav"), URL(fileURLWithPath: "/same.wav"),
+                                 URL(fileURLWithPath: "/same.wav"), URL(fileURLWithPath: "/last.wav")])
+                try session.play(index: 2)
+                if state == .paused { session.pause() }
+                if state == .stopped { session.stop() }
+                session.seek(to: 42); session.setVolume(0.3)
+                session.setEqualizerEnabled(true); session.applyEqualizerPreset(.voice)
+                /// Current duplicate retains this ID even after the preceding duplicate is removed.
+                let identity = session.currentTrack?.id
+                /// Stop baseline accounts for deliberately stopped setup rather than queue edits.
+                let stops = backend.stopCount
+                session.removeTrack(at: 3)
+                session.removeTrack(at: 0)
+                XCTAssertEqual(session.selectedIndex, 1)
+                session.removeTrack(at: 0)
+                XCTAssertEqual(session.currentTrack?.id, identity); XCTAssertEqual(session.selectedIndex, 0)
+                XCTAssertEqual(session.position, 42); XCTAssertEqual(session.state, state)
+                XCTAssertEqual(session.volume, 0.3); XCTAssertEqual(session.equalizer, backend.settings)
+                XCTAssertEqual(session.equalizer.gains, EqualizerPreset.voice.gains)
+                XCTAssertEqual(backend.stopCount, stops); XCTAssertEqual(backend.loadCount, 1)
+                session.removeTrack(at: -1); session.removeTrack(at: 9)
+                XCTAssertEqual(session.tracks.count, 1)
+            }
+        }
+    }
+
+    /// Removing the loaded entry stops rather than implicitly playing another row; explicit resume prepares a new track.
+    func testRemovingLoadedEntryClearsSelectionUntilExplicitPlay() async throws {
+        try await MainActor.run {
+            /// Both advancing and paused output must stop when its queue entry is removed.
+            for paused in [false, true] {
+                /// Fake output exposes the prepared old duration even after stopping.
+                let backend = FakeAudioBackend()
+                /// Remaining rows cannot be mistaken for the now-removed decoder's selection.
+                let session = PlaybackSession(backend: backend)
+                session.enqueue([URL(fileURLWithPath: "/one.wav"), URL(fileURLWithPath: "/two.wav")])
+                try session.play(index: 0); session.seek(to: 42)
+                if paused { session.pause() }
+                session.removeTrack(at: 0)
+                XCTAssertNil(session.currentTrack); XCTAssertNil(session.selectedIndex)
+                XCTAssertEqual(session.state, .stopped); XCTAssertFalse(backend.playing)
+                XCTAssertEqual(session.position, 0); XCTAssertEqual(session.duration, 0)
+                XCTAssertEqual(backend.loadCount, 1); XCTAssertEqual(backend.stopCount, 1)
+                session.finished(successfully: true)
+                XCTAssertNil(session.currentTrack)
+                try session.resume()
+                XCTAssertEqual(session.currentTrack?.title, "two")
+                XCTAssertEqual(backend.loadCount, 2); XCTAssertEqual(session.state, .playing)
+            }
+        }
+    }
+
+    /// Reordering follows final-index semantics and current identity; completion uses the updated successor.
+    func testReorderingLoadedTrackAndNeighborsPreservesStream() async throws {
+        try await MainActor.run {
+            /// Call counts ensure moving rows never reloads or stops the decoder.
+            let backend = FakeAudioBackend()
+            /// Four distinct entries establish moves in both directions and a new completion successor.
+            let session = PlaybackSession(backend: backend)
+            session.enqueue(["a", "b", "c", "d"].map { name in URL(fileURLWithPath: "/\(name).wav") })
+            try session.play(index: 2); session.seek(to: 73)
+            /// Stable loaded identity survives its own movement and movement across its old index.
+            let identity = session.currentTrack?.id
+            session.moveTrack(from: 0, to: 3)
+            XCTAssertEqual(session.tracks.map(\.title), ["b", "c", "d", "a"])
+            XCTAssertEqual(session.selectedIndex, 1)
+            session.moveTrack(from: 1, to: 0)
+            XCTAssertEqual(session.tracks.map(\.title), ["c", "b", "d", "a"])
+            XCTAssertEqual(session.currentTrack?.id, identity); XCTAssertEqual(session.selectedIndex, 0)
+            XCTAssertEqual(session.position, 73); XCTAssertEqual(session.state, .playing)
+            XCTAssertEqual(backend.loadCount, 1); XCTAssertEqual(backend.stopCount, 0)
+            /// Invalid/no-op moves emit no model changes or decoder calls.
+            var notifications = 0
+            session.onChange = { notifications += 1 }
+            session.moveTrack(from: -1, to: 0); session.moveTrack(from: 0, to: 4); session.moveTrack(from: 0, to: 0)
+            XCTAssertEqual(notifications, 0)
+            session.finished(successfully: true)
+            XCTAssertEqual(session.currentTrack?.title, "b"); XCTAssertEqual(backend.loadCount, 2)
+        }
+    }
+
+    /// Clearing drops all selections and cancels output while preserving gain/EQ; completion cannot restart appended entries.
+    func testClearQueueRetainsAudioSettingsAndIgnoresOldCompletion() async throws {
+        try await MainActor.run {
+            /// Prepared fake decoder intentionally keeps its old duration to exercise session masking.
+            let backend = FakeAudioBackend()
+            /// Paused session with nondefault audio controls.
+            let session = PlaybackSession(backend: backend)
+            session.enqueue([URL(fileURLWithPath: "/one.wav")]); try session.resume()
+            session.seek(to: 31); session.pause(); session.setVolume(0.6)
+            session.setEqualizerEnabled(true); session.applyEqualizerPreset(.bass)
+            /// Empty no-op clearing should not repeatedly notify or stop the decoder.
+            var notifications = 0
+            session.onChange = { notifications += 1 }
+            session.clearQueue(); session.clearQueue()
+            XCTAssertEqual(notifications, 1); XCTAssertEqual(backend.stopCount, 1)
+            XCTAssertTrue(session.tracks.isEmpty); XCTAssertNil(session.currentTrack)
+            XCTAssertEqual(session.state, .stopped); XCTAssertEqual(session.position, 0); XCTAssertEqual(session.duration, 0)
+            XCTAssertEqual(session.volume, 0.6); XCTAssertEqual(session.equalizer.gains, EqualizerPreset.bass.gains)
+            XCTAssertTrue(session.equalizer.isEnabled)
+            session.enqueue([URL(fileURLWithPath: "/new.wav")])
+            session.finished(successfully: true)
+            XCTAssertNil(session.currentTrack); XCTAssertFalse(backend.playing)
+            try session.resume()
+            XCTAssertEqual(session.currentTrack?.title, "new"); XCTAssertEqual(backend.loadCount, 2)
+        }
+    }
     /// Separate Classic Play/Pause commands never toggle unexpectedly or reload a paused track.
     func testDedicatedPlayAndPauseAreIdempotent() async throws {
         try await MainActor.run {

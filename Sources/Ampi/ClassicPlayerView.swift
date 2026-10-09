@@ -99,7 +99,7 @@ import AmpiCore
     }
 }
 
-/// Partial Classic main player with real transport and native slider/text fallbacks.
+/// Partial Classic main player with real transport, shuffle/repeat, and native slider/text fallbacks.
 @MainActor final class ClassicPlayerView: NSView, PlayerSurface {
     /// Main content view installed in the existing native window.
     var view: NSView { self }
@@ -129,6 +129,10 @@ import AmpiCore
     let playlistButton = SkinButton()
     /// Native EQ toggle shows the detachable equalizer without changing its bypass state.
     let equalizerButton = SkinButton()
+    /// Original native shuffle toggle; imported legacy shuffle artwork is not interpreted yet.
+    let shuffleButton = SkinButton()
+    /// Original native repeat control cycling Off, All, and One with a visible policy label.
+    let repeatButton = SkinButton()
     /// Unicode filename label using system typography rather than an incomplete bitmap font.
     private let trackLabel = NSTextField(labelWithString: "Open music")
     /// Minutes/seconds label refreshed from the common session.
@@ -174,7 +178,17 @@ import AmpiCore
         equalizerButton.setAccessibilityLabel("Show or hide equalizer")
         equalizerButton.toolTip = "Show or hide equalizer (⌘E)"
         addSubview(equalizerButton)
+        configureModeButton(shuffleButton, action: "shuffle", frame: NSRect(x: 164, y: 89, width: 47, height: 15))
+        configureModeButton(repeatButton, action: "repeat", frame: NSRect(x: 214, y: 89, width: 50, height: 15))
         refresh()
+    }
+
+    /// Places an original native mode button in the bottom-right Classic region, outside transport sprites.
+    private func configureModeButton(_ button: SkinButton, action: String, frame: NSRect) {
+        button.frame = scaled(frame); button.actionName = action
+        button.fill = .black; button.ink = .white
+        button.target = self; button.action = #selector(changeMode(_:))
+        addSubview(button)
     }
 
     /// Rejects construction without a validated package and playback session.
@@ -221,13 +235,24 @@ import AmpiCore
 
     /// Refreshes state without resetting a thumb during native mouse tracking.
     func refresh() {
-        trackLabel.stringValue = session.currentTrack?.title ?? "Open music to start"
-        trackLabel.toolTip = session.currentTrack?.title
+        trackLabel.stringValue = session.currentTrack.map { session.displayTitle(for: $0) } ?? "Open music to start"
+        trackLabel.toolTip = session.currentTrack.map { session.trackDescription(for: $0) }
         /// Whole elapsed seconds for the compact native clock, bounded by the loaded duration.
         let seconds = Int(min(session.duration, max(0, session.position)))
         timeLabel.stringValue = String(format: "%02d:%02d", seconds / 60, seconds % 60)
         stateLabel.stringValue = session.status
         stateLabel.toolTip = session.status
+        shuffleButton.title = "SHUF"
+        shuffleButton.state = session.isShuffleEnabled ? .on : .off
+        shuffleButton.setAccessibilityLabel("Shuffle")
+        shuffleButton.setAccessibilityValue(session.isShuffleEnabled ? "On" : "Off")
+        shuffleButton.toolTip = "Shuffle: \(session.isShuffleEnabled ? "On" : "Off") (⌘⇧S)"
+        repeatButton.title = "R:\(session.repeatMode == .one ? "1" : session.repeatMode.rawValue.uppercased())"
+        repeatButton.state = session.repeatMode == .off ? .off : .on
+        repeatButton.setAccessibilityLabel("Cycle repeat mode")
+        repeatButton.setAccessibilityValue(session.repeatMode.rawValue.capitalized)
+        repeatButton.toolTip = "Repeat: \(session.repeatMode.rawValue.capitalized). Click to cycle Off, All, One."
+        shuffleButton.needsDisplay = true; repeatButton.needsDisplay = true
         seekSlider.isEnabled = session.currentTrack != nil && session.duration > 0
         seekSlider.minValue = 0; seekSlider.maxValue = max(1, session.duration)
         if seekSlider.cell?.isHighlighted != true { seekSlider.doubleValue = session.position }
@@ -242,6 +267,8 @@ import AmpiCore
     @objc private func togglePlaylist(_ sender: SkinButton) { onAction?("playlist") }
     /// Shows or hides EQ through the controller while retaining DSP settings and transport.
     @objc private func toggleEqualizer(_ sender: SkinButton) { onAction?("equalizer") }
+    /// Sends the shuffle/repeat native button command through the common controller.
+    @objc private func changeMode(_ sender: SkinButton) { onAction?(sender.actionName) }
 
     /// Applies the seek slider's seconds value to the loaded track.
     @objc private func seek(_ sender: NSSlider) { session.seek(to: sender.doubleValue) }

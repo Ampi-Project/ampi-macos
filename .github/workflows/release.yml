@@ -1,0 +1,119 @@
+# /// Published releases build tagged sources; a manual run builds the same assets without attaching them to a release.
+name: Build macOS release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to test (for example v0.1.0-beta.1); no release upload
+        required: true
+        type: string
+
+# /// Only the final upload job needs permission to modify release assets.
+permissions:
+  contents: read
+
+# /// Runs for one version serialize; reruns replace that version's assets only after both builds succeed.
+concurrency:
+  group: macos-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # /// Native Apple Silicon runner produces an arm64 app and the shared corresponding-source asset.
+          - runner: macos-15
+            arch: arm64
+          # /// Native Intel runner produces x86_64; runtime acceptance on older Intel Macs remains a manual check.
+          - runner: macos-15-intel
+            arch: x86_64
+    env:
+      # /// Release-provided strings enter scripts as environment values and are validated before use.
+      AMPI_RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      AMPI_ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Validate version tag
+        shell: bash
+        run: |
+          if [[ ! "$AMPI_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Expected vMAJOR.MINOR.PATCH, optionally followed by a prerelease suffix." >&2
+            exit 2
+          fi
+
+      - name: Check out the release tag
+        # /// Immutable official checkout v6 revision; checkout credentials are not persisted into the source tree.
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: refs/tags/${{ env.AMPI_RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Record native build tools
+        run: |
+          xcodebuild -version
+          swift --version
+          uname -m
+
+      - name: Test the core without requiring an audio output device
+        run: swift test --force-resolved-versions --filter AmpiCoreTests
+
+      - name: Build, verify, and zip the optimized app
+        run: bash scripts/package-release.sh "$AMPI_RELEASE_TAG" "$AMPI_ARCH"
+
+      - name: Export app and pinned dependency sources
+        if: matrix.arch == 'arm64'
+        run: bash scripts/package-source.sh "$AMPI_RELEASE_TAG"
+
+      - name: Retain build assets for upload or manual inspection
+        # /// Immutable official upload-artifact v7 revision; only generated archives/checksums leave the runner.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: release-${{ matrix.arch }}
+          path: |
+            dist/Ampi-*.zip
+            dist/Ampi-*.tar.gz
+            dist/Ampi-*.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+  upload:
+    name: Attach assets to the published release
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Collect both architectures and corresponding source
+        # /// Immutable official download-artifact v8 revision; uniquely named assets merge into one directory.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Verify checksums and upload to the same release
+        env:
+          # /// Ephemeral repository token permits asset upload without a personal access token or signing secret.
+          GH_TOKEN: ${{ github.token }}
+          # /// Exact published tag and repository identify the existing release; this job never creates one.
+          AMPI_RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_REPO: ${{ github.repository }}
+        working-directory: release-assets
+        run: |
+          test -f "Ampi-${AMPI_RELEASE_TAG}-macos-arm64.zip"
+          test -f "Ampi-${AMPI_RELEASE_TAG}-macos-x86_64.zip"
+          test -f "Ampi-${AMPI_RELEASE_TAG}-source.tar.gz"
+          test -f "Ampi-${AMPI_RELEASE_TAG}-macos-arm64.zip.sha256"
+          test -f "Ampi-${AMPI_RELEASE_TAG}-macos-x86_64.zip.sha256"
+          test -f "Ampi-${AMPI_RELEASE_TAG}-source.tar.gz.sha256"
+          sha256sum --check ./*.sha256
+          gh release upload "$AMPI_RELEASE_TAG" ./*.zip ./*.tar.gz ./*.sha256 --repo "$GH_REPO" --clobber

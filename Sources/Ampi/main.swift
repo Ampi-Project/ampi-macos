@@ -9,6 +9,38 @@ app.setActivationPolicy(.regular)
 /// Process arguments, including the executable path and optional developer-check mode.
 let arguments = CommandLine.arguments
 
+if arguments.count == 3 && arguments[1] == "--create-metadata-fixture" {
+    Task { @MainActor in
+        do { try await MetadataSmokeCheck.createFixture(at: URL(fileURLWithPath: arguments[2])); print("Created original tagged AAC fixture."); exit(0) }
+        catch { print("Metadata fixture failed: \(error)"); exit(1) }
+    }
+    app.run(); exit(1)
+}
+
+if (3...5).contains(arguments.count) && arguments[1] == "--metadata-smoke-test" {
+    Task { @MainActor in
+        do {
+            try await MetadataSmokeCheck.run(audio: URL(fileURLWithPath: arguments[2]),
+                skin: arguments.count >= 4 ? URL(fileURLWithPath: arguments[3]) : nil,
+                preview: arguments.count == 5 ? URL(fileURLWithPath: arguments[4]) : nil)
+            exit(0)
+        } catch { print("Metadata smoke failed: \(error)"); exit(1) }
+    }
+    app.run(); exit(1)
+}
+
+if (3...4).contains(arguments.count) && arguments[1] == "--persistence-smoke-test" {
+    Task { @MainActor in
+        do {
+            try await PersistenceSmokeCheck.run(audio: URL(fileURLWithPath: arguments[2]),
+                skin: arguments.count == 4 ? URL(fileURLWithPath: arguments[3]) : nil)
+            exit(0)
+        } catch { print("Persistence smoke failed: \(error)"); exit(1) }
+    }
+    app.run()
+    exit(1)
+}
+
 // Developer checks exercise the real native renderer/backend without interactive dialogs.
 if arguments.count == 4 && arguments[1] == "--classic-equalizer-preview" {
     do {
@@ -92,6 +124,8 @@ if (3...4).contains(arguments.count) && arguments[1] == "--smoke-test" {
         let backend = NativeAudioBackend()
         /// Test session that exercises transport while the native layout is replaced.
         let session = PlaybackSession(backend: backend)
+        /// Played-back completions exercise real queue advancement and cancellation during this smoke check.
+        backend.onFinish = { [weak session] success in session?.finished(successfully: success) }
         session.setVolume(0)
         session.enqueue([URL(fileURLWithPath: arguments[2])])
         try session.play(index: 0)
@@ -107,9 +141,11 @@ if (3...4).contains(arguments.count) && arguments[1] == "--smoke-test" {
         let originalTrack = session.currentTrack?.id
         /// Player initially using Retro Stereo, then switched to Quiet Space during playback.
         let controller = PlayerWindowController(session: session, theme: try ThemeCatalog.builtin("retro"))
+        controller.perform("shuffle"); controller.perform("repeat")
         try controller.apply(ThemeCatalog.builtin("minimal"))
         guard session.currentTrack?.id == originalTrack, session.state == .playing,
-              session.volume == 0, session.position >= 0.5 else { throw PlaybackError.couldNotStart }
+              session.volume == 0, session.position >= 0.5,
+              session.isShuffleEnabled, session.repeatMode == .all else { throw PlaybackError.couldNotStart }
         if arguments.count == 4 {
             controller.open([URL(fileURLWithPath: arguments[3])])
             /// Bounded wait for the same asynchronous inspector invoked by file-open and drop handling.
@@ -135,6 +171,14 @@ if (3...4).contains(arguments.count) && arguments[1] == "--smoke-test" {
                 }
                 /// Actual bitmap controls route through native selectors to the real audio backend.
                 guard let classic = controller.surface as? ClassicPlayerView else { throw PlaybackError.couldNotStart }
+                guard classic.shuffleButton.state == .on, classic.repeatButton.title == "R:ALL" else {
+                    throw ThemeError.invalid("Classic mode controls lost the live shuffle/repeat policy.")
+                }
+                classic.repeatButton.performClick(nil)
+                guard session.repeatMode == .one, session.state == .playing, session.position >= 0.5 else {
+                    throw ThemeError.invalid("Cycling repeat changed the loaded stream.")
+                }
+                classic.repeatButton.performClick(nil); classic.repeatButton.performClick(nil)
                 classic.buttons[2].performClick(nil)
                 guard session.state == .paused else { throw PlaybackError.couldNotStart }
                 session.seek(to: session.duration)
@@ -170,11 +214,44 @@ if (3...4).contains(arguments.count) && arguments[1] == "--smoke-test" {
                 print("PASS: Classic activation, sprite Play/Pause, playlist selection/transport/hide/reopen, endpoint seek, and default restoration preserved the real audio session.")
             }
         }
+        /// Native layouts expose the same table edits after any optional Classic regression checks.
+        guard let table = controller.editingTable else { throw ThemeError.invalid("Native queue editing is unavailable.") }
+        session.enqueue([URL(fileURLWithPath: arguments[2])]); session.seek(to: 0.5)
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        controller.editQueue(.moveDown)
+        guard session.currentTrack?.id == originalTrack, session.selectedIndex == 1,
+              session.state == .playing, session.position >= 0.5 else {
+            throw ThemeError.invalid("Reordering restarted or changed the loaded audio entry.")
+        }
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        controller.editQueue(.remove)
+        guard session.currentTrack?.id == originalTrack, session.selectedIndex == 0,
+              session.state == .playing, session.position >= 0.5 else {
+            throw ThemeError.invalid("Removing another entry disturbed the loaded track.")
+        }
         try session.togglePlayback()
         guard session.state == .paused else { throw PlaybackError.couldNotStart }
         session.stop()
         guard session.state == .stopped, session.position == 0 else { throw PlaybackError.couldNotStart }
         guard session.equalizer == originalEqualizer else { throw ThemeError.invalid("Transport reset the EQ curve.") }
+        try session.resume()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        controller.editQueue(.remove)
+        guard session.currentTrack == nil, session.state == .stopped, session.duration == 0, session.position == 0 else {
+            throw ThemeError.invalid("Removing the loaded entry did not stop and clear its selection.")
+        }
+        session.enqueue([URL(fileURLWithPath: arguments[2])]); try session.resume()
+        controller.editQueue(.clear)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        guard session.tracks.isEmpty, session.currentTrack == nil, session.state == .stopped,
+                      session.duration == 0, session.position == 0, session.volume == 0,
+                      session.isShuffleEnabled, session.repeatMode == .all,
+              session.equalizer == originalEqualizer,
+              FileManager.default.fileExists(atPath: arguments[2]) else {
+            throw ThemeError.invalid("Clear Queue changed audio settings, left playback active, or removed the file.")
+        }
+        print("PASS: real muted queue reorder/remove preserved the stream; current removal and clear stopped safely, retained EQ/volume, and kept audio files.")
+        print("PASS: shuffle/repeat controls and policy survived native/Classic replacement and queue clearing without resetting playback.")
         print("PASS: muted AVAudioEngine output through EQ, seek, layout replacement, pause, stop, and curve retention.")
         exit(0)
     } catch { print("Smoke test failed: \(error)"); exit(1) }

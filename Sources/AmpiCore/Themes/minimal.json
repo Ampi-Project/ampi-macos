@@ -17,7 +17,9 @@
     { "id": "open", "kind": "button", "frame": [340, 224, 88, 42], "label": "Open", "action": "open" },
     { "id": "volume-label", "kind": "label", "frame": [32, 288, 70, 22], "label": "Volume", "fontSize": 12 },
     { "id": "volume", "kind": "slider", "frame": [108, 286, 320, 24], "label": "Volume", "binding": "volume" },
-    { "id": "queue", "kind": "queue", "frame": [32, 332, 396, 150], "label": "Playback queue" },
+    { "id": "shuffle", "kind": "button", "frame": [32, 322, 193, 28], "label": "Shuffle", "action": "shuffle" },
+    { "id": "repeat", "kind": "button", "frame": [235, 322, 193, 28], "label": "Repeat", "action": "repeat" },
+    { "id": "queue", "kind": "queue", "frame": [32, 366, 396, 116], "label": "Playback queue" },
     { "id": "status", "kind": "label", "frame": [32, 505, 396, 24], "label": "Ready", "binding": "status", "fontSize": 11 }
   ]
 }

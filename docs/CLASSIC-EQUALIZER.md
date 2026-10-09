@@ -20,7 +20,7 @@ The implementation follows Apple's [player-node scheduling and clock documentati
 
 An optional `eqmain.bmp` must be at least **275×116** pixels. The renderer crops its top-left 275×116 background and draws at 2× nearest-neighbor scale. Native sliders, labels, bypass, and preset controls overlay it; an original footer provides state and Reset Flat. The fixed content is 550×282 logical points with native window chrome. Missing artwork gives a usable original native backdrop. Present undersized artwork disables activation with a diagnostic, preserving all three active surfaces and music. Main, playlist, and EQ are validated before installation.
 
-Historical EQ slider/button/title-state sprites, the response graph, Auto mode, shade/docking/resizing, Winamp preset interchange, and persistence are not implemented. The inspector reports these limits. Fixtures are independently drawn GPL artwork, including an EQ dimension-failure package; they do not certify every historical skin.
+Historical EQ slider/button/title-state sprites, the response graph, Auto mode, shade/docking/resizing, Winamp preset interchange, and remembered panel geometry are not implemented. [Increment 8](PERSISTENCE.md) restores the curve, preamp, and bypass across restart. Fixtures are independently drawn GPL artwork, including an EQ dimension-failure package; they do not certify every historical skin.
 
 ## Verification
 

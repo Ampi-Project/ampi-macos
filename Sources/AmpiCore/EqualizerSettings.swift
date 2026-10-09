@@ -2,7 +2,7 @@
 import Foundation
 
 /// Session-owned ten-band equalizer values; gains use decibels and default to bypassed, flat output.
-public struct EqualizerSettings: Equatable, Sendable {
+public struct EqualizerSettings: Equatable, Codable, Sendable {
     /// Classic nominal center frequencies in hertz, ordered from bass to treble.
     public static let frequencies: [Float] = [31, 62, 125, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000]
     /// Whether the preamp and all filters process audio; disabling preserves their values.

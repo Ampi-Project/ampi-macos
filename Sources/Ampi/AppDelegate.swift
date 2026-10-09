@@ -8,18 +8,53 @@ import AmpiCore
     private var controller: PlayerWindowController?
     /// Native audio output retained for the lifetime of the application delegate.
     private let backend = NativeAudioBackend()
+    /// Startup/termination persistence coordinator retained alongside the native player.
+    private var persistence: PlayerPersistence?
+    /// File-open events arriving during asynchronous restore are appended after startup completes.
+    private var pendingOpenRequests: [[URL]] = []
+    /// Keeps externally opened files from being overwritten by an in-flight startup restore.
+    private var isRestoring = true
+    /// Guards repeated native Quit/close requests while the final save awaits the storage actor.
+    private var isTerminating = false
 
     /// Starts the default player and menus, or displays a fatal startup error and exits.
     /// - Parameter notification: AppKit launch event; no payload is needed here.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { await launchPlayer() }
+    }
+
+    /// Builds the default player, restores saved state stopped, and then accepts queued file-open events.
+    private func launchPlayer() async {
         do {
             /// Session shared by the window and native completion handler.
             let session = PlaybackSession(backend: backend)
             /// Success is the native completion result; the weak session receives auto-advance/errors.
             backend.onFinish = { [weak session] success in session?.finished(successfully: success) }
-            controller = PlayerWindowController(session: session, theme: try ThemeCatalog.builtin("retro"))
+            /// Default remains available if saved geometry or Classic assets no longer validate.
+            let player = PlayerWindowController(session: session, theme: try ThemeCatalog.builtin("retro"))
+            controller = player
+            /// Actor owns serial bounded JSON reads and atomic replacements in native application support.
+            let store = SessionStateStore(url: try SessionStateStore.defaultURL())
+            /// Recovery happens before attaching observation so it cannot save a partially restored session.
+            let recovery = PlayerPersistence(controller: player, store: store)
+            persistence = recovery
+            /// Combined nonfatal diagnostics leave valid queue/settings usable, without triggering audio.
+            let notices = await recovery.restore()
+            if !notices.isEmpty { session.report(ThemeError.invalid(notices.joined(separator: " "))) }
+            recovery.startSaving()
+            /// Native primary-window close uses the same final save/error handling as the Quit command.
+            player.onRequestClose = { [weak self] in
+                guard self?.isTerminating == false else { return }
+                NSApp.terminate(nil)
+            }
             installMenus()
-            controller?.showWindow(nil)
+            player.showWindow(nil)
+            isRestoring = false
+            /// OS-delivered files represent an explicit open request, so normal importer playback rules apply.
+            let queuedRequests = pendingOpenRequests
+            pendingOpenRequests.removeAll()
+            /// Preserve independent OS-open requests rather than merging an audio request with a separate skin import.
+            for urls in queuedRequests { player.open(urls) }
             NSApp.activate(ignoringOtherApps: true)
         } catch {
             /// Blocking startup alert used before a player window is available.
@@ -35,7 +70,45 @@ import AmpiCore
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     /// Forwards files opened through macOS to the current player's import/queue handler.
-    func application(_ application: NSApplication, open urls: [URL]) { controller?.open(urls) }
+    func application(_ application: NSApplication, open urls: [URL]) {
+        if isRestoring { pendingOpenRequests.append(urls) }
+        else { controller?.open(urls) }
+    }
+
+    /// Awaits a final durable snapshot on Quit/primary close; save errors let the owner cancel or quit without saving.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminating else { return .terminateLater }
+        /// Before startup completes there is no restored session to overwrite, so termination is immediate.
+        guard !isRestoring, let persistence else { backend.stop(); return .terminateNow }
+        isTerminating = true
+        /// Pause retains the in-memory offset in case the owner cancels a failed save.
+        let wasPlaying = controller?.session.state == .playing
+        controller?.session.pause()
+        Task {
+            do {
+                try await persistence.flush()
+                controller?.session.stop()
+                sender.reply(toApplicationShouldTerminate: true)
+            } catch {
+                /// Meaningful quit choice leaves the previous valid disk state intact if final replacement fails.
+                let alert = NSAlert()
+                alert.messageText = "Ampi could not save this session"
+                alert.informativeText = "The previous saved session is unchanged. Cancel to keep the app open, or quit without saving these changes."
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Quit Without Saving")
+                if alert.runModal() == .alertSecondButtonReturn {
+                    controller?.session.stop(); sender.reply(toApplicationShouldTerminate: true)
+                } else {
+                    isTerminating = false; persistence.resumeSaving()
+                    if wasPlaying {
+                        do { try controller?.session.resume() } catch { controller?.session.report(error) }
+                    }
+                    sender.reply(toApplicationShouldTerminate: false)
+                }
+            }
+        }
+        return .terminateLater
+    }
 
     /// Installs native app, file, transport, theme, and window menus with shortcuts.
     private func installMenus() {
@@ -64,6 +137,27 @@ import AmpiCore
         add("Stop", to: playback, action: #selector(stop), key: ".")
         add("Previous Track", to: playback, action: #selector(previous), key: "\u{F702}")
         add("Next Track", to: playback, action: #selector(next), key: "\u{F703}")
+        playback.addItem(.separator())
+        add("Shuffle", to: playback, action: #selector(toggleShuffle), key: "s", modifiers: [.command, .shift])
+        /// Repeat choices share one validated policy instead of independent toggle states.
+        let repeatMenu = submenu("Repeat", in: playback)
+        /// Fixed policies carry raw values; validation reflects changes from any player surface.
+        for mode in PlaybackSession.RepeatMode.allCases {
+            /// Native checkmark item selects Off, All, or One without starting playback.
+            let item = NSMenuItem(title: mode.rawValue.capitalized, action: #selector(selectRepeat(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = mode.rawValue
+            repeatMenu.addItem(item)
+        }
+
+        /// Queue commands act on the highlighted row of the current native or Classic presentation.
+        let queue = submenu("Queue", in: main)
+        /// Each native item uses the same typed action as table keyboard/context input.
+        for action in QueueEditAction.allCases {
+            /// Dynamic validation prevents edits at missing rows or movement past either queue end.
+            let item = NSMenuItem(title: action.title, action: #selector(editQueue(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = action.rawValue
+            queue.addItem(item)
+        }
 
         /// Built-in layout choices, including the default-layout recovery command.
         let themes = submenu("Themes", in: main)
@@ -74,6 +168,7 @@ import AmpiCore
         let windowMenu = submenu("Window", in: main)
         add("Show / Hide Classic Playlist", to: windowMenu, action: #selector(togglePlaylist), key: "l")
         add("Show / Hide Equalizer", to: windowMenu, action: #selector(toggleEqualizer), key: "e")
+        add("Show / Hide Track Info", to: windowMenu, action: #selector(toggleTrackInfo), key: "i")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         NSApp.windowsMenu = windowMenu
     }
@@ -117,14 +212,41 @@ import AmpiCore
     @objc private func previous() { controller?.perform("previous") }
     /// Advances to the next track or stops at the queue end from the native menu.
     @objc private func next() { controller?.perform("next") }
+    /// Toggles shuffle without changing the queue's visible order or loaded stream.
+    @objc private func toggleShuffle() { controller?.perform("shuffle") }
+    /// Sets a recognized repeat policy from a native menu payload.
+    @objc private func selectRepeat(_ sender: NSMenuItem) {
+        /// Native menu values are accepted only when they represent an explicit supported policy.
+        guard let value = sender.representedObject as? String,
+              let mode = PlaybackSession.RepeatMode(rawValue: value) else { return }
+        controller?.session.setRepeatMode(mode)
+    }
     /// Toggles the detachable Classic playlist using a shortcut available while either player panel is focused.
     @objc private func togglePlaylist() { controller?.togglePlaylist() }
     /// Opens or hides the shared EQ panel from either native or Classic layouts.
     @objc private func toggleEqualizer() { controller?.toggleEqualizer() }
+    /// Shows or hides the read-only current-track metadata/artwork panel in every skin.
+    @objc private func toggleTrackInfo() { controller?.toggleTrackInfo() }
 
     /// Disables the Classic-only panel command while native layouts show their embedded queue.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        menuItem.action == #selector(togglePlaylist) ? controller?.classicPlaylist != nil : true
+        if menuItem.action == #selector(toggleShuffle) {
+            menuItem.state = controller?.session.isShuffleEnabled == true ? .on : .off
+        }
+        /// A repeat item is checked exactly when its fixed policy matches the live shared session.
+        if menuItem.action == #selector(selectRepeat(_:)), let value = menuItem.representedObject as? String {
+            menuItem.state = controller?.session.repeatMode.rawValue == value ? .on : .off
+        }
+        /// Queue payloads are fixed strings created above; availability follows the displayed browse selection.
+        if menuItem.action == #selector(editQueue(_:)), let value = menuItem.representedObject as? String,
+           let action = QueueEditAction(rawValue: value) { return controller?.canEditQueue(action) == true }
+        return menuItem.action == #selector(togglePlaylist) ? controller?.classicPlaylist != nil : true
+    }
+    /// Dispatches a recognized native Queue menu command to the active presentation's table.
+    @objc private func editQueue(_ sender: NSMenuItem) {
+        /// Fixed action payload maps to an edit with dynamic bounds checking.
+        guard let value = sender.representedObject as? String, let action = QueueEditAction(rawValue: value) else { return }
+        controller?.editQueue(action)
     }
     /// Restores the original Retro Stereo layout.
     @objc private func retro() { changeTheme("retro") }

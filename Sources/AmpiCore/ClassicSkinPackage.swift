@@ -8,6 +8,8 @@ import ZIPFoundation
 public struct ClassicSkinPackage: Sendable {
     /// Source filename used for the preview title; not inferred authorship metadata.
     public let name: String
+    /// Original local archive/folder used for restart revalidation; nil for in-memory decoded fixtures.
+    public let sourceURL: URL?
     /// Normalized relative directory containing the unique main.bmp asset.
     public let root: String
     /// Case-normalized filenames and original bytes from the selected skin directory.
@@ -42,7 +44,7 @@ public struct ClassicSkinPackage: Sendable {
         if values.isDirectory == true { files = try readFolder(url) }
         else if values.isRegularFile == true { files = try readArchive(readFile(url, limit: maximumArchiveBytes)) }
         else { throw ThemeError.invalid("Choose a regular ZIP/.wsz file or skin folder.") }
-        return try inspect(files, name: url.deletingPathExtension().lastPathComponent)
+        return try inspect(files, name: url.deletingPathExtension().lastPathComponent, sourceURL: url)
     }
 
     /// Validates a bounded in-memory ZIP payload, useful for reproducible conformance tests.
@@ -179,7 +181,8 @@ public struct ClassicSkinPackage: Sendable {
     }
 
     /// Selects one Classic root, validates bitmap decoding, and reports optional missing assets.
-    private static func inspect(_ files: [String: Data], name: String) throws -> ClassicSkinPackage {
+    /// Source URL retains the local archive/folder for restart; nil represents an in-memory package.
+    private static func inspect(_ files: [String: Data], name: String, sourceURL: URL? = nil) throws -> ClassicSkinPackage {
         guard !files.keys.contains(where: { ($0 as NSString).lastPathComponent == "skin.xml" }) else {
             throw ThemeError.invalid("Modern XML/MAKI skins are not supported by this Classic inspector.")
         }
@@ -203,7 +206,7 @@ public struct ClassicSkinPackage: Sendable {
         /// Honest compatibility diagnostics; a decoded background does not mean a usable full skin.
         var warnings = ["Preview only until explicitly activated. Main, playlist, and equalizer artwork are checked separately. EQ uses native controls and ten-band DSP; full historical Classic controls remain pending."]
         if !missing.isEmpty { warnings.append("Missing common assets: " + missing.joined(separator: ", ") + ".") }
-        return ClassicSkinPackage(name: name, root: root, assets: assets, warnings: warnings)
+        return ClassicSkinPackage(name: name, sourceURL: sourceURL, root: root, assets: assets, warnings: warnings)
     }
 
     /// Checks BMP identity, dimensions, pixel budget, and actual decoding before preview creation.

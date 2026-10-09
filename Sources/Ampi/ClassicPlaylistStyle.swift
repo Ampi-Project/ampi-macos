@@ -49,7 +49,7 @@ import AmpiCore
             titles = []; borders = []
             report.append("Missing pledit.bmp: playlist uses an original native border and controls.")
         }
-        report.append("Playlist is append-only. Editing, sorting, saved playlists, skinned menus/scrollbars, shade, resizing, and docking remain unavailable.")
+        report.append("Playlist supports single-entry remove, clear, and Up/Down reordering using native buttons, menus, and keyboard input. Sorting, saved playlists, skinned menus/scrollbars, shade, resizing, and docking remain unavailable.")
         diagnostics = report
     }
 

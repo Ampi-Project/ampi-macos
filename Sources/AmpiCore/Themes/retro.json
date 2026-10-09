@@ -19,7 +19,9 @@
     { "id": "open", "kind": "button", "frame": [314, 160, 70, 36], "label": "OPEN", "action": "open" },
     { "id": "volume-label", "kind": "label", "frame": [412, 159, 160, 18], "label": "VOLUME", "fontSize": 10 },
     { "id": "volume", "kind": "slider", "frame": [408, 178, 190, 20], "label": "Volume", "binding": "volume" },
-    { "id": "queue-label", "kind": "label", "frame": [22, 216, 550, 20], "label": "PLAYLIST / DOUBLE-CLICK TO PLAY", "fontSize": 11 },
+    { "id": "queue-label", "kind": "label", "frame": [22, 216, 300, 20], "label": "PLAYLIST / DOUBLE-CLICK TO PLAY", "fontSize": 11 },
+    { "id": "shuffle", "kind": "button", "frame": [330, 208, 130, 28], "label": "Shuffle", "action": "shuffle" },
+    { "id": "repeat", "kind": "button", "frame": [468, 208, 130, 28], "label": "Repeat", "action": "repeat" },
     { "id": "queue", "kind": "queue", "frame": [22, 242, 576, 154], "label": "Playback queue" },
     { "id": "status", "kind": "label", "frame": [22, 416, 576, 20], "label": "Ready", "binding": "status", "fontSize": 11 }
   ]

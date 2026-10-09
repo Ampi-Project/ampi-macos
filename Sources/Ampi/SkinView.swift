@@ -58,18 +58,6 @@ extension NSColor {
     }
 }
 
-/// Queue table that lets Return or keypad Enter play the selected row.
-@MainActor private final class QueueTable: NSTableView {
-    /// Main-actor activation callback receiving the selected zero-based queue index.
-    var onKeyboardActivate: ((Int) -> Void)?
-    /// Activates a selection on Enter and delegates other keyboard handling to AppKit.
-    override func keyDown(with event: NSEvent) {
-        if (event.keyCode == 36 || event.keyCode == 76), selectedRow >= 0 {
-            onKeyboardActivate?(selectedRow)
-        } else { super.keyDown(with: event) }
-    }
-}
-
 /// Renders a validated declarative layout using native controls bound to one session.
 @MainActor final class SkinView: NSView, PlayerSurface, NSTableViewDataSource, NSTableViewDelegate {
     /// Native layout content installed by the window controller.
@@ -92,14 +80,18 @@ extension NSColor {
     private var sliders: [(String, NSSlider)] = []
     /// Original-title/button pairs used to switch Play to Pause without losing theme casing.
     private var playButtons: [(String, SkinButton)] = []
+    /// Shuffle/repeat controls whose checked state and spoken value follow the shared session.
+    private(set) var modeButtons: [SkinButton] = []
     /// Optional queue control; a layout can omit it or supply exactly one.
-    private var queueTable: NSTableView?
+    private(set) var queueTable: EditableQueueTable?
     /// Queue hint shown only while the session has no tracks.
     private var emptyLabel: NSTextField?
     /// Queue identities from the last table reload, avoiding reloads on every timer tick.
     private var queueIDs: [UUID] = []
-    /// Selection from the last table reload, used to detect transport selection changes.
-    private var renderedSelection: Int?
+    /// Loaded identity from the last reload; reordering its index must not steal a browsed selection.
+    private var renderedTrack: UUID?
+    /// Last metadata revision, allowing tag arrival to update rows without stealing a browsed selection.
+    private var renderedMetadata: UInt = 0
     /// Uses top-left coordinates to match the JSON layout's frame convention.
     override var isFlipped: Bool { true }
 
@@ -174,6 +166,7 @@ extension NSColor {
                 button.setAccessibilityLabel(accessibleAction(element.action!))
                 addSubview(button)
                 if element.action == "playPause" { playButtons.append((element.label, button)) }
+                if ["shuffle", "repeat"].contains(element.action!) { modeButtons.append(button) }
             case .slider:
                 /// Continuous native slider later refreshed with position or volume bounds.
                 let slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: self, action: #selector(sliderChanged(_:)))
@@ -197,6 +190,8 @@ extension NSColor {
         case "previous": return "Previous track"
         case "next": return "Next track"
         case "stop": return "Stop playback"
+        case "shuffle": return "Shuffle"
+        case "repeat": return "Cycle repeat mode"
         default: return "Play or pause"
         }
     }
@@ -209,7 +204,8 @@ extension NSColor {
         scroll.drawsBackground = true
         scroll.backgroundColor = NSColor(hex: theme.palette.panel)
         /// Native track table with Return-key activation support.
-        let table = QueueTable(frame: NSRect(origin: .zero, size: scroll.bounds.size))
+        let table = EditableQueueTable(session: session)
+        table.frame = NSRect(origin: .zero, size: scroll.bounds.size)
         /// Single track-title column sized to leave room for the scroll container.
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("track"))
         column.width = element.frame[2] - 20
@@ -224,7 +220,7 @@ extension NSColor {
         table.target = self
         table.doubleAction = #selector(queueActivated(_:))
         /// Row is the selected zero-based queue index activated with Return or keypad Enter.
-        table.onKeyboardActivate = { [weak self] row in
+        table.onPlay = { [weak self] row in
             /// Surface retained only for this activation, avoiding a table callback retain cycle.
             guard let self else { return }
             do { try self.session.play(index: row) } catch { self.session.report(error) }
@@ -245,12 +241,14 @@ extension NSColor {
     }
 
     /// Synchronizes text, sliders, transport labels, accessibility values, and queue selection.
-    /// The table reloads only when queue identities or the selected track change.
+    /// The table reloads only when queue identities, selected track, or derived metadata change.
     func refresh() {
         /// Session field name and corresponding label to update together.
         for (binding, label) in labels {
             switch binding {
-            case "track": label.stringValue = session.currentTrack?.title ?? "No track selected"
+            case "track":
+                label.stringValue = session.currentTrack.map { session.displayTitle(for: $0) } ?? "No track selected"
+                label.toolTip = session.currentTrack.map { session.trackDescription(for: $0) }
             case "time": label.stringValue = "\(clock(session.position)) / \(clock(session.duration))"
             case "status": label.stringValue = session.status
             default: break
@@ -273,16 +271,37 @@ extension NSColor {
             button.setAccessibilityLabel(session.state == .playing ? "Pause playback" : "Play playback")
             button.needsDisplay = true
         }
+        /// Each optional mode control exposes a visible policy value and matching native accessibility state.
+        for button in modeButtons {
+            if button.actionName == "shuffle" {
+                button.title = "Shuffle: \(session.isShuffleEnabled ? "On" : "Off")"
+                button.state = session.isShuffleEnabled ? .on : .off
+                button.setAccessibilityValue(session.isShuffleEnabled ? "On" : "Off")
+            } else {
+                button.title = "Repeat: \(session.repeatMode.rawValue.capitalized)"
+                button.state = session.repeatMode == .off ? .off : .on
+                button.setAccessibilityValue(session.repeatMode.rawValue.capitalized)
+            }
+            button.needsDisplay = true
+        }
         /// Current queue identities compared with the last rendered table contents.
         let ids = session.tracks.map(\.id)
-        if ids != queueIDs || renderedSelection != session.selectedIndex {
-            queueIDs = ids
-            renderedSelection = session.selectedIndex
-            queueTable?.reloadData()
-            /// Loaded track index mirrored into the table selection after reloading.
-            if let selection = session.selectedIndex {
-                queueTable?.selectRowIndexes(IndexSet(integer: selection), byExtendingSelection: false)
-            }
+        /// Transport changes follow the new loaded entry; queue-only edits preserve the browsed identity.
+        let changedTrack = renderedTrack != session.currentTrack?.id
+        /// Existing native queue is refreshed only when its identities or loaded-track marker change.
+        if let table = queueTable, ids != queueIDs || changedTrack || renderedMetadata != session.metadataRevision {
+            /// Previously browsed entry is resolved by UUID after reloading, including repeated filenames.
+            let browsed = queueIDs.indices.contains(table.selectedRow) ? queueIDs[table.selectedRow] : nil
+            table.reloadData()
+            /// Queue edits preserve browsing; explicit track activation selects the loaded entry.
+            let selection = changedTrack ? session.selectedIndex : browsed.flatMap { ids.firstIndex(of: $0) }
+            /// Valid selected row is restored after the reload; a removed browse identity clears the highlight.
+            if let selection { table.selectRowIndexes(IndexSet(integer: selection), byExtendingSelection: false) }
+            else { table.deselectAll(nil) }
+            /// Only transport changes scroll automatically; ordinary timer ticks keep the user's viewport.
+            if changedTrack, let index = session.selectedIndex { table.scrollRowToVisible(index) }
+            queueIDs = ids; renderedTrack = session.currentTrack?.id
+            renderedMetadata = session.metadataRevision
         }
         emptyLabel?.isHidden = !session.tracks.isEmpty
     }
@@ -320,12 +339,19 @@ extension NSColor {
     ///   - tableColumn: Column whose width determines the text field's available space.
     ///   - row: Valid zero-based index provided by AppKit's data-source callbacks.
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard session.tracks.indices.contains(row) else { return nil }
+        /// Live queue identity resolves the embedded title independently of the current playback or browse row.
+        let track = session.tracks[row]
+        /// Current marker remains independent of the highlighted row used for browsing and edits.
+        let loaded = session.tracks[row].id == session.currentTrack?.id
         /// Truncating track title with a one-based display number and accessible file title.
-        let label = NSTextField(labelWithString: String(format: "%02d  ", row + 1) + session.tracks[row].title)
+        let label = NSTextField(labelWithString: (loaded ? "▶ " : "  ") + String(format: "%02d  ", row + 1) + session.displayTitle(for: track))
         label.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         label.textColor = NSColor(hex: row == session.selectedIndex ? theme.palette.accent : theme.palette.text)
         label.lineBreakMode = .byTruncatingTail
-        label.setAccessibilityLabel(session.tracks[row].title)
+        label.setAccessibilityLabel(session.displayTitle(for: track) + (loaded ? ", current track" : ""))
+        label.toolTip = session.trackDescription(for: track)
+        label.cell?.baseWritingDirection = .leftToRight
         /// Native row container retaining the track text field.
         let cell = NSTableCellView()
         cell.addSubview(label)

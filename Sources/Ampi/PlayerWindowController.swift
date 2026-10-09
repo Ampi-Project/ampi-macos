@@ -17,8 +17,18 @@ import UniformTypeIdentifiers
     private(set) var classicPlaylist: ClassicPlaylistWindowController?
     /// Detachable session-owned EQ controls; native layouts use an original backdrop.
     private(set) var equalizerPanel: EqualizerWindowController?
+    /// Shared read-only metadata/artwork panel, retained across native/Classic replacements.
+    private(set) var trackInfoPanel: TrackInfoWindowController?
+    /// Bounded asynchronous tag reader follows live identities without accessing the playback backend.
+    private let metadataCoordinator: TrackMetadataCoordinator
     /// Cancellable background inspection; a newer import supersedes a pending one.
     private var inspectionTask: Task<Void, Never>?
+    /// Durable presentation, updated only after a replacement successfully installs.
+    private(set) var savedSkin: SavedSkin
+    /// Native persistence observer receives durable/session changes without owning the rendering observer.
+    var onPersistentChange: (() -> Void)?
+    /// Interactive app close request routes through the application's asynchronous final save.
+    var onRequestClose: (() -> Void)?
 
     /// Builds a fixed-size player window for a previously validated layout.
     /// - Parameters:
@@ -26,7 +36,9 @@ import UniformTypeIdentifiers
     ///   - theme: Validated initial layout; callers must validate before constructing controls.
     init(session: PlaybackSession, theme: Theme) {
         self.session = session
+        self.metadataCoordinator = TrackMetadataCoordinator(session: session)
         self.surface = SkinView(theme: theme, session: session)
+        self.savedSkin = .native(theme)
         /// Native titled window sized to the layout's content surface.
         let window = NSWindow(contentRect: surface.view.bounds, styleMask: [.titled, .closable, .miniaturizable],
                               backing: .buffered, defer: false)
@@ -38,7 +50,12 @@ import UniformTypeIdentifiers
         connectSurface()
         window.center()
         /// Refreshes the current surface after model changes without retaining the controller.
-        session.onChange = { [weak self] in self?.refreshSurfaces() }
+        session.onChange = { [weak self] in
+            self?.metadataCoordinator.synchronize(); self?.refreshSurfaces(); self?.onPersistentChange?()
+        }
+        /// Metadata completion updates text/images without saving unchanged durable session data.
+        session.onMetadataChange = { [weak self] in self?.refreshSurfaces() }
+        metadataCoordinator.synchronize()
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshSurfaces() }
         }
@@ -61,6 +78,7 @@ import UniformTypeIdentifiers
         let origin = equalizerPanel?.window?.frame.origin
         install(replacement)
         if let equalizer { installEqualizer(equalizer, visible: visible, origin: origin) }
+        savedSkin = .native(theme); onPersistentChange?()
     }
 
     /// Composes a validated Classic main surface before replacing the current interface.
@@ -98,6 +116,7 @@ import UniformTypeIdentifiers
         if visible { playlist.showWindow(nil) }
         updatePlaylistVisibility(visible)
         installEqualizer(equalizer, visible: equalizerVisible, origin: equalizerOrigin)
+        savedSkin = .classic(package.sourceURL); onPersistentChange?()
     }
 
     /// Installs prepared content, preserving the session, observer, and refresh timer.
@@ -121,12 +140,39 @@ import UniformTypeIdentifiers
         surface.refresh()
         classicPlaylist?.content.refresh()
         equalizerPanel?.content.refresh()
+        trackInfoPanel?.content.refresh()
+    }
+
+    /// Shows/hides metadata for the loaded track with either skin; browsing the queue alone never changes its content.
+    func toggleTrackInfo() {
+        if trackInfoPanel == nil { trackInfoPanel = TrackInfoWindowController(session: session) }
+        /// Existing panel follows session selection while hidden and retains its native placement across skin switches.
+        guard let panel = trackInfoPanel else { return }
+        if panel.window?.isVisible == true { panel.close() }
+        else { panel.content.refresh(); panel.showWindow(nil) }
     }
 
     /// Plays a valid highlighted queue row and reports failures without clearing the current track.
     private func playQueueEntry(_ index: Int) {
         do { try session.play(index: index) }
         catch { session.report(error); showError(error.localizedDescription) }
+    }
+
+    /// Active presentation's browsable queue, shared with native menu commands even when another panel has focus.
+    var editingTable: EditableQueueTable? {
+        classicPlaylist?.content.table ?? (surface as? SkinView)?.queueTable
+    }
+
+    /// Reports whether the active queue can perform a selected-row edit or a global clear.
+    func canEditQueue(_ action: QueueEditAction) -> Bool {
+        action == .clear ? !session.tracks.isEmpty : editingTable?.canEdit(action) == true
+    }
+
+    /// Edits the highlighted queue row; Clear also works for native layouts that omit a queue control.
+    func editQueue(_ action: QueueEditAction) {
+        /// Visible presentation supplies its browsed row; layouts without a table can still clear globally.
+        if let table = editingTable { table.performEdit(action) }
+        else if action == .clear { session.clearQueue() }
     }
 
     /// Shows or hides the current Classic playlist without recreating the panel or playback session.
@@ -187,12 +233,21 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// Closes child windows and stops output when the primary player closes, preventing orphan playback.
+    /// Routes a primary native close request through final-save Quit, keeping the window available if saving fails.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        /// Interactive host can intercept closing; isolated previews/tests retain ordinary AppKit lifecycle.
+        if let onRequestClose { onRequestClose(); return false }
+        return true
+    }
+
+    /// Closes child windows and stops output after the primary window actually closes.
     func windowWillClose(_ notification: Notification) {
         inspectionTask?.cancel()
+        metadataCoordinator.cancel()
         timer?.invalidate(); timer = nil
         classicPlaylist?.close()
         equalizerPanel?.close()
+        trackInfoPanel?.close()
         classicPreview?.close()
         session.stop()
     }
@@ -310,6 +365,8 @@ import UniformTypeIdentifiers
             case "pause": session.pause()
             case "stop": session.stop()
             case "next": try session.next()
+            case "shuffle": session.setShuffleEnabled(!session.isShuffleEnabled)
+            case "repeat": session.cycleRepeatMode()
             default: break
             }
         } catch { session.report(error); showError(error.localizedDescription) }

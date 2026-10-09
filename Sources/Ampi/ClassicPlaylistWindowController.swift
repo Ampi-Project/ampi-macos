@@ -2,18 +2,6 @@
 import AppKit
 import AmpiCore
 
-/// Queue table whose Return/keypad Enter activates a highlighted row without changing single-click behavior.
-@MainActor final class ClassicPlaylistTable: NSTableView {
-    /// Receives a valid zero-based row index when keyboard activation is requested.
-    var onPlay: ((Int) -> Void)?
-
-    /// Plays the highlighted row on Enter; all other navigation stays native.
-    override func keyDown(with event: NSEvent) {
-        if (event.keyCode == 36 || event.keyCode == 76), selectedRow >= 0 { onPlay?(selectedRow) }
-        else { super.keyDown(with: event) }
-    }
-}
-
 /// Supplies imported row selection colors while leaving table accessibility and navigation native.
 @MainActor private final class ClassicPlaylistRow: NSTableRowView {
     /// Imported or original fallback background of a selected queue row.
@@ -39,7 +27,7 @@ import AmpiCore
     /// Receives local dropped files for the common skin/audio importer.
     var onDrop: (([URL]) -> Void)?
     /// Native queue used by visible interaction and regression checks.
-    let table = ClassicPlaylistTable()
+    let table: EditableQueueTable
     /// Native scroll container; the scrollbar is explicitly not a legacy sprite implementation.
     private let scroll = NSScrollView()
     /// Toolbar buttons keyed by common command, including Play Selected.
@@ -52,12 +40,15 @@ import AmpiCore
     private var renderedIDs: [UUID] = []
     /// Last loaded track identity, independent of the user's browsed row.
     private var renderedTrack: UUID?
+    /// Derived tag revision updates row labels while preserving the user's browsed identity.
+    private var renderedMetadata: UInt = 0
     /// Skin destinations use top-left Classic coordinates.
     override var isFlipped: Bool { true }
 
     /// Configures fixed 2× geometry, native queue behavior, labelled transport, and file drops.
     init(session: PlaybackSession, style: ClassicPlaylistStyle) {
         self.session = session; self.style = style
+        table = EditableQueueTable(session: session)
         super.init(frame: NSRect(x: 0, y: 0, width: 550, height: 464))
         registerForDraggedTypes([.fileURL])
         scroll.frame = NSRect(x: 24, y: 40, width: 486, height: 348)
@@ -87,8 +78,8 @@ import AmpiCore
         empty.font = .systemFont(ofSize: 12); empty.textColor = style.normal
         empty.maximumNumberOfLines = 2
         addSubview(empty)
-        countLabel.frame = NSRect(x: 28, y: 394, width: 485, height: 18)
-        countLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        countLabel.frame = NSRect(x: 28, y: 394, width: 214, height: 18)
+        countLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         countLabel.textColor = style.normal
         countLabel.setAccessibilityLabel("Playlist track count")
         addSubview(countLabel)
@@ -106,6 +97,21 @@ import AmpiCore
             button.target = self; button.action = #selector(activate(_:))
             button.setAccessibilityLabel(command == "selected" ? "Play selected playlist track" : label)
             addSubview(button); buttons[command] = button
+            x += width + 4
+        }
+        /// Compact native editing row keeps the fixed historical panel dimensions unchanged.
+        let edits: [(QueueEditAction, String, CGFloat)] = [(.remove, "Remove", 70), (.moveUp, "Up", 54),
+            (.moveDown, "Down", 58), (.clear, "Clear", 62)]
+        x = 250
+        /// Each edit uses the same table method as its context menu and keyboard handler.
+        for (edit, label, width) in edits {
+            /// Palette-matched editing control with a full spoken action name.
+            let button = SkinButton(frame: NSRect(x: x, y: 390, width: width, height: 24))
+            button.title = label; button.actionName = edit.rawValue
+            button.fill = style.background; button.ink = style.normal
+            button.target = self; button.action = #selector(activate(_:))
+            button.setAccessibilityLabel(edit.title); button.toolTip = edit.title
+            addSubview(button); buttons[edit.rawValue] = button
             x += width + 4
         }
         refresh()
@@ -158,14 +164,14 @@ import AmpiCore
         NSRect(x: 24, y: 390, width: 502, height: 60).fill()
     }
 
-    /// Refreshes the queue only when identities/current track change, preserving a browsed row on pause/seek.
+    /// Refreshes rows on identity/current-track/tag changes, preserving browsing on asynchronous tag arrival.
     func refresh() {
-        /// Stable queue identities allow append-only updates without mistaking duplicate filenames for one track.
+        /// Stable identities preserve browse selection across appends, removals, and reordering, including duplicate URLs.
         let ids = session.tracks.map(\.id)
         /// Loaded-track changes update its marker and reveal the new current row.
         let changedTrack = renderedTrack != session.currentTrack?.id
-        if ids != renderedIDs || changedTrack {
-            /// Browsed queue identity retained when adding tracks without changing the loaded track.
+        if ids != renderedIDs || changedTrack || renderedMetadata != session.metadataRevision {
+            /// Browsed queue identity retained when editing without changing the loaded track.
             let browsed = renderedIDs.indices.contains(table.selectedRow) ? renderedIDs[table.selectedRow] : nil
             table.reloadData()
             /// Desired row follows transport changes; otherwise it preserves the user's browse selection.
@@ -176,14 +182,16 @@ import AmpiCore
             /// Transport-selected row is scrolled into view, but timer ticks and append operations do not jump.
             if changedTrack, let index = session.selectedIndex { table.scrollRowToVisible(index) }
             renderedIDs = ids; renderedTrack = session.currentTrack?.id
+            renderedMetadata = session.metadataRevision
         }
         empty.isHidden = !session.tracks.isEmpty
         countLabel.stringValue = "\(session.tracks.count) track\(session.tracks.count == 1 ? "" : "s") · \(session.state.rawValue.capitalized)"
         buttons["selected"]?.isEnabled = session.tracks.indices.contains(table.selectedRow)
+        updateEditButtons()
         needsDisplay = true
     }
 
-    /// Returns the append-only queue length to the native table.
+    /// Returns the current editable queue length to the native table.
     func numberOfRows(in tableView: NSTableView) -> Int { session.tracks.count }
 
     /// Creates a Unicode-capable row title with a loaded-track marker separate from the browse highlight.
@@ -194,13 +202,13 @@ import AmpiCore
         /// Loaded track receives a visible triangle; browsing another row does not change playback.
         let loaded = track.id == session.currentTrack?.id
         /// Original native text field; no limited bitmap font is used for Unicode filenames.
-        let label = NSTextField(labelWithString: "\(loaded ? "▶" : " ") \(row + 1). \(track.title)")
+        let label = NSTextField(labelWithString: "\(loaded ? "▶" : " ") \(row + 1). \(session.displayTitle(for: track))")
         label.font = .monospacedSystemFont(ofSize: 12, weight: loaded ? .semibold : .regular)
         label.textColor = loaded ? style.current : style.normal
         label.lineBreakMode = .byTruncatingTail
         label.cell?.baseWritingDirection = .leftToRight
-        label.setAccessibilityLabel("\(row + 1). \(track.title)\(loaded ? ", current track" : "")")
-        label.toolTip = track.title
+        label.setAccessibilityLabel("\(row + 1). \(session.displayTitle(for: track))\(loaded ? ", current track" : "")")
+        label.toolTip = session.trackDescription(for: track)
         label.frame = NSRect(x: 5, y: 3, width: max(20, tableColumn?.width ?? 400) - 10, height: 18)
         label.autoresizingMask = [.width]
         /// Native row container retains the field while AppKit handles scrolling and selection.
@@ -217,6 +225,13 @@ import AmpiCore
     /// Updates Play Selected availability when the user browses without starting playback.
     func tableViewSelectionDidChange(_ notification: Notification) {
         buttons["selected"]?.isEnabled = session.tracks.indices.contains(table.selectedRow)
+        updateEditButtons()
+    }
+
+    /// Keeps editing buttons disabled for missing rows, empty queues, and movement beyond the queue ends.
+    private func updateEditButtons() {
+        /// Every typed action shares the table's dynamic selection and bounds checks.
+        for edit in QueueEditAction.allCases { buttons[edit.rawValue]?.isEnabled = table.canEdit(edit) }
     }
 
     /// Double-click activates only a real clicked row; double-clicking empty space does nothing.
@@ -230,7 +245,11 @@ import AmpiCore
         if sender.actionName == "selected" {
             guard session.tracks.indices.contains(table.selectedRow) else { return }
             onPlay?(table.selectedRow)
-        } else { onAction?(sender.actionName) }
+            return
+        }
+        /// Recognized edit is dispatched locally; transport/file actions still use the shared controller.
+        if let edit = QueueEditAction(rawValue: sender.actionName) { table.performEdit(edit) }
+        else { onAction?(sender.actionName) }
     }
 
     /// Advertises local file drops anywhere over the playlist's native content.

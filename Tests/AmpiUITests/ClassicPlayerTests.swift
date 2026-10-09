@@ -26,6 +26,46 @@ import XCTest
 
 /// Checks real native control dispatch, replacement safety, sprite geometry, and activation diagnostics.
 final class ClassicPlayerTests: XCTestCase {
+    /// Native and Classic mode buttons share checked state without altering stream/queue during replacements.
+    func testModeControlsAndSkinReplacementRetainPlaybackPolicy() async throws {
+        /// Original artwork supports the Classic main/playlist/EQ profiles.
+        let package = try ClassicSkinPackage.load(fixture("playable-classic.wsz"))
+        try await MainActor.run {
+            _ = NSApplication.shared
+            /// Decoder count and offset expose any accidental reset from mode control actions.
+            let backend = ClassicTestBackend()
+            /// Persistent session starts paused so policy changes cannot hide unintended transport changes.
+            let session = PlaybackSession(backend: backend)
+            session.enqueue([URL(fileURLWithPath: "/one.wav"), URL(fileURLWithPath: "/two.wav")])
+            try session.resume(); session.seek(to: 42); session.pause()
+            /// Controller connects all supported button actions to the shared model.
+            let controller = PlayerWindowController(session: session, theme: try ThemeCatalog.builtin("retro"))
+            defer { controller.close() }
+            /// Native built-in controls must be present rather than only accessible from menus.
+            let native = try XCTUnwrap(controller.surface as? SkinView)
+            XCTAssertEqual(native.modeButtons.count, 2)
+            native.modeButtons[0].performClick(nil); native.modeButtons[1].performClick(nil)
+            XCTAssertTrue(session.isShuffleEnabled); XCTAssertEqual(session.repeatMode, .all)
+            XCTAssertEqual(native.modeButtons[0].title, "Shuffle: On")
+            XCTAssertEqual(native.modeButtons[1].accessibilityValue() as? String, "All")
+            try controller.applyClassic(package)
+            /// Original native Classic controls expose the same live state and checked appearance.
+            let classic = try XCTUnwrap(controller.surface as? ClassicPlayerView)
+            XCTAssertEqual(classic.shuffleButton.state, .on); XCTAssertEqual(classic.repeatButton.title, "R:ALL")
+            classic.repeatButton.performClick(nil)
+            XCTAssertEqual(session.repeatMode, .one); XCTAssertEqual(classic.repeatButton.title, "R:1")
+            classic.repeatButton.performClick(nil); classic.shuffleButton.performClick(nil)
+            XCTAssertEqual(session.repeatMode, .off); XCTAssertFalse(session.isShuffleEnabled)
+            try controller.apply(ThemeCatalog.builtin("minimal"))
+            /// Second layout has distinct geometry but still reflects modes set in the Classic surface.
+            let minimal = try XCTUnwrap(controller.surface as? SkinView)
+            XCTAssertEqual(minimal.modeButtons[0].title, "Shuffle: Off")
+            XCTAssertEqual(minimal.modeButtons[1].title, "Repeat: Off")
+            XCTAssertEqual(session.state, .paused); XCTAssertEqual(session.position, 42)
+            XCTAssertEqual(backend.loads, 1); XCTAssertEqual(session.tracks.count, 2)
+        }
+    }
+
     /// Locates a bundled original fixture independent of the test process's working directory.
     private func fixture(_ name: String) throws -> URL {
         try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures"))

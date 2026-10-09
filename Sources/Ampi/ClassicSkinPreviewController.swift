@@ -44,7 +44,7 @@ import AmpiCore
         report.autoresizingMask = [.width]
         report.textContainer?.widthTracksTextView = true
         /// Activation diagnosis is independent of the package's bounded inspection profile.
-        var activationReport = "Main, playlist, and equalizer activation available. Ten-band DSP, preamp, bypass, and original presets use native EQ controls. Missing optional artwork uses native fallbacks. Balance, shuffle/repeat, visualization, shade, and docking are not implemented."
+        var activationReport = "Main, playlist, and equalizer activation available. Ten-band DSP, preamp, bypass, presets, shuffle, and Off/All/One repeat use native controls. Missing optional artwork uses native fallbacks. Historical shuffle/repeat artwork, balance, visualization, shade, and docking are not implemented."
         do {
             _ = try ClassicMainSprites(package: package)
             /// Playlist border validation and color/fallback diagnostics share the actual activation profile.

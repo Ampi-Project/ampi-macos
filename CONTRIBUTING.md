@@ -2,6 +2,8 @@
 
 Build with `swift build` and run the existing checks with `swift test`. See [README.md](README.md) for local app packaging and [DEVELOPMENT.md](DEVELOPMENT.md) for the current milestone. Changes should keep this repository buildable without sibling projects.
 
+macOS is the first working prototype; independent Windows and Linux applications are planned. Everyone is welcome to contribute code, original themes/cleared fixtures, testing, accessibility feedback, and documentation. Open an issue to discuss a larger change or send a focused pull request for a fix. See [DEVELOPMENT.md](DEVELOPMENT.md) for current gaps. Each native app keeps its own build and repository.
+
 ## Required code documentation
 
 Every handwritten Swift function and usable variable must have `///` documentation immediately before its declaration. This includes public and private methods, initializers, overrides, protocol requirements, stored/computed properties, constants, local variables, tests, and the package manifest. Document types and enum cases too.

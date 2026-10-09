@@ -57,7 +57,7 @@ public struct Theme: Codable, Sendable {
         public let label: String
         /// Text/slider session field; nil for unbound labels, buttons, and queues.
         public let binding: String?
-        /// Button operation: open, previous, playPause, stop, or next; nil otherwise.
+        /// Button operation: open, previous, playPause, stop, next, shuffle, or repeat; nil otherwise.
         public let action: String?
         /// Optional label font size in points, from ten through 40.
         public let fontSize: Double?
@@ -117,7 +117,7 @@ public struct Theme: Codable, Sendable {
             switch element.kind {
             case .button:
                 /// Validated operation; only the fixed action allowlist can be dispatched.
-                guard let action = element.action, ["open", "previous", "playPause", "stop", "next"].contains(action),
+                guard let action = element.action, ["open", "previous", "playPause", "stop", "next", "shuffle", "repeat"].contains(action),
                       element.binding == nil, !element.label.isEmpty, f[2] >= 32, f[3] >= 28 else {
                     throw ThemeError.invalid("Invalid button action or hit target for \(element.id).")
                 }
