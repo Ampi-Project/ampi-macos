@@ -43,8 +43,11 @@ import UniformTypeIdentifiers
             item(.commonIdentifierArtist, value: fixtureArtist as NSString),
             item(.commonIdentifierAlbumName, value: fixtureAlbum as NSString),
             item(.commonIdentifierArtwork, value: try artwork() as NSData)]
-        // The completion-based API retains compatibility with the macOS 13 deployment target.
-        await exporter.export()
+        /// The completion bridge keeps exporter access on the main actor with Swift 6.1/macOS 13 support.
+        /// The continuation is the only value captured by AVFoundation's completion handler; status is read after resuming.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            exporter.exportAsynchronously { continuation.resume() }
+        }
         guard exporter.status == .completed else { throw exporter.error ?? PlaybackError.couldNotStart }
     }
 
